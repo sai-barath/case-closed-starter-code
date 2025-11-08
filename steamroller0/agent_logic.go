@@ -14,7 +14,8 @@ import (
 var debugMode = os.Getenv("DEBUG") == "1"
 
 const (
-	SEARCH_TIME_LIMIT = 3500 * time.Millisecond // **CUSTOMIZE**: Time budget per move
+	// SEARCH_TIME_LIMIT = 3500 * time.Millisecond // **CUSTOMIZE**: Time budget per move
+	SEARCH_TIME_LIMIT = 100 * time.Millisecond // **CUSTOMIZE**: Time budget per move
 	WIN_SCORE         = 10000                   // Terminal score for winning
 	LOSE_SCORE        = -10000                  // Terminal score for losing
 	DRAW_SCORE        = 0                       // Terminal score for draw
