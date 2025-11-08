@@ -15,7 +15,7 @@ LAST_POSTED_STATE = {}
 game_lock = Lock()
  
 PARTICIPANT = "ParticipantX"
-AGENT_NAME = "AgentX"
+AGENT_NAME = "Agent0"
 
 
 @app.route("/", methods=["GET"])

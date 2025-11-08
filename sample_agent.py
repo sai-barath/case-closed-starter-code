@@ -4,6 +4,7 @@ This agent runs as a Flask server and responds to judge requests.
 """
 
 import os
+import socket
 from flask import Flask, request, jsonify
 from collections import deque
 
@@ -148,7 +149,24 @@ def decide_move(my_trail, other_trail, turn_count, my_boosts):
 
 
 if __name__ == "__main__":
-    # For development only. Port can be overridden with the PORT env var.
+    import socket
+    
+    def is_port_available(port):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("0.0.0.0", port))
+                return True
+            except OSError:
+                return False
+    
     port = int(os.environ.get("PORT", "5009"))
+    
+    if not is_port_available(port):
+        print(f"Port {port} is busy, trying fallback port...")
+        port = 5008 if port == 5009 else 5009
+        if not is_port_available(port):
+            print(f"Port {port} is also busy! Using original port and hoping for the best...")
+            port = int(os.environ.get("PORT", "5009"))
+    
     print(f"Starting {AGENT_NAME} ({PARTICIPANT}) on port {port}...")
     app.run(host="0.0.0.0", port=port, debug=False)
