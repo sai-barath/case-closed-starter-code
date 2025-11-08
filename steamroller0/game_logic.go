@@ -171,6 +171,18 @@ func (a *Agent) GetValidMoves() []Direction {
 	return valid
 }
 
+type MoveState struct {
+	AddedPositions   []Position
+	OldDirection     Direction
+	NewDirection     Direction
+	BoostUsed        bool
+	MyAliveChanged   bool
+	OtherAliveChanged bool
+	OldMyAlive       bool
+	OldOtherAlive    bool
+	LengthAdded      int
+}
+
 func (a *Agent) Move(direction Direction, otherAgent *Agent, useBoost bool) bool {
 	if !a.Alive {
 		return false
@@ -226,4 +238,106 @@ func (a *Agent) Move(direction Direction, otherAgent *Agent, useBoost bool) bool
 	}
 
 	return true
+}
+
+func (a *Agent) UndoableMove(direction Direction, otherAgent *Agent, useBoost bool) (bool, MoveState) {
+	state := MoveState{
+		OldDirection: a.Direction,
+		OldMyAlive:   a.Alive,
+		BoostUsed:    false,
+		LengthAdded:  0,
+	}
+	
+	if otherAgent != nil {
+		state.OldOtherAlive = otherAgent.Alive
+	}
+
+	if !a.Alive {
+		return false, state
+	}
+
+	if useBoost && a.BoostsRemaining <= 0 {
+		useBoost = false
+	}
+
+	numMoves := 1
+	if useBoost {
+		numMoves = 2
+		a.BoostsRemaining--
+		state.BoostUsed = true
+	}
+
+	for moveNum := 0; moveNum < numMoves; moveNum++ {
+		if direction.DX == -a.Direction.DX && direction.DY == -a.Direction.DY {
+			continue
+		}
+
+		head := a.Trail[len(a.Trail)-1]
+		newHead := Position{
+			X: head.X + direction.DX,
+			Y: head.Y + direction.DY,
+		}
+
+		newHead = a.Board.TorusCheck(newHead)
+		cellState := a.Board.GetCellState(newHead)
+		state.NewDirection = direction
+		a.Direction = direction
+
+		if cellState == AGENT {
+			if a.ContainsPosition(newHead) {
+				a.Alive = false
+				state.MyAliveChanged = true
+				return false, state
+			}
+
+			if otherAgent != nil && otherAgent.Alive && otherAgent.ContainsPosition(newHead) {
+				if otherAgent.IsHead(newHead) {
+					a.Alive = false
+					otherAgent.Alive = false
+					state.MyAliveChanged = true
+					state.OtherAliveChanged = true
+					return false, state
+				} else {
+					a.Alive = false
+					state.MyAliveChanged = true
+					return false, state
+				}
+			}
+		}
+
+		a.Trail = append(a.Trail, newHead)
+		a.TrailSet[newHead] = true
+		a.Length++
+		state.LengthAdded++
+		state.AddedPositions = append(state.AddedPositions, newHead)
+		a.Board.SetCellState(newHead, AGENT)
+	}
+
+	return true, state
+}
+
+func (a *Agent) UndoMove(state MoveState, otherAgent *Agent) {
+	for i := len(state.AddedPositions) - 1; i >= 0; i-- {
+		pos := state.AddedPositions[i]
+		if len(a.Trail) > 0 && a.Trail[len(a.Trail)-1].X == pos.X && a.Trail[len(a.Trail)-1].Y == pos.Y {
+			a.Trail = a.Trail[:len(a.Trail)-1]
+		}
+		delete(a.TrailSet, pos)
+		a.Board.SetCellState(pos, EMPTY)
+	}
+	
+	a.Length -= state.LengthAdded
+	a.Direction = state.OldDirection
+	
+	if state.BoostUsed {
+		a.BoostsRemaining++
+	}
+	
+	if state.MyAliveChanged {
+		a.Alive = state.OldMyAlive
+	}
+	
+	if state.OtherAliveChanged && otherAgent != nil {
+		otherAgent.Alive = state.OldOtherAlive
+	}
 }

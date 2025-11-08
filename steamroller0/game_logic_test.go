@@ -953,3 +953,151 @@ func TestAllDirectionsFromCenter(t *testing.T) {
 		}
 	}
 }
+
+func TestUndoableMoveBasic(t *testing.T) {
+	board := NewGameBoard(18, 20)
+	agent := NewAgent(1, Position{X: 5, Y: 5}, RIGHT, board)
+
+	initialLength := agent.Length
+	initialHead := agent.GetHead()
+
+	success, state := agent.UndoableMove(RIGHT, nil, false)
+	if !success {
+		t.Errorf("Expected move to succeed")
+	}
+
+	newHead := agent.GetHead()
+	if newHead.X != 7 || newHead.Y != 5 {
+		t.Errorf("Expected head at (7, 5), got (%d, %d)", newHead.X, newHead.Y)
+	}
+
+	agent.UndoMove(state, nil)
+
+	if agent.Length != initialLength {
+		t.Errorf("Expected length %d after undo, got %d", initialLength, agent.Length)
+	}
+	if agent.GetHead().X != initialHead.X || agent.GetHead().Y != initialHead.Y {
+		t.Errorf("Expected head back at (%d, %d), got (%d, %d)", 
+			initialHead.X, initialHead.Y, agent.GetHead().X, agent.GetHead().Y)
+	}
+	if board.GetCellState(Position{X: 7, Y: 5}) != EMPTY {
+		t.Errorf("Expected (7, 5) to be EMPTY after undo")
+	}
+}
+
+func TestUndoableMoveWithBoost(t *testing.T) {
+	board := NewGameBoard(18, 20)
+	agent := NewAgent(1, Position{X: 5, Y: 5}, RIGHT, board)
+
+	initialLength := agent.Length
+	initialBoosts := agent.BoostsRemaining
+
+	success, state := agent.UndoableMove(RIGHT, nil, true)
+	if !success {
+		t.Errorf("Expected boost move to succeed")
+	}
+
+	if agent.Length != initialLength+2 {
+		t.Errorf("Expected length %d after boost, got %d", initialLength+2, agent.Length)
+	}
+	if agent.BoostsRemaining != initialBoosts-1 {
+		t.Errorf("Expected %d boosts remaining, got %d", initialBoosts-1, agent.BoostsRemaining)
+	}
+
+	agent.UndoMove(state, nil)
+
+	if agent.Length != initialLength {
+		t.Errorf("Expected length %d after undo, got %d", initialLength, agent.Length)
+	}
+	if agent.BoostsRemaining != initialBoosts {
+		t.Errorf("Expected %d boosts after undo, got %d", initialBoosts, agent.BoostsRemaining)
+	}
+}
+
+func TestUndoableMoveCollision(t *testing.T) {
+	board := NewGameBoard(18, 20)
+	agent := NewAgent(1, Position{X: 5, Y: 5}, RIGHT, board)
+
+	agent.Move(RIGHT, nil, false)
+	agent.Move(DOWN, nil, false)
+	agent.Move(LEFT, nil, false)
+
+	success, state := agent.UndoableMove(UP, nil, false)
+	if success {
+		t.Errorf("Expected collision move to fail")
+	}
+	if agent.Alive {
+		t.Errorf("Expected agent to be dead after collision")
+	}
+
+	agent.UndoMove(state, nil)
+
+	if !agent.Alive {
+		t.Errorf("Expected agent to be alive after undo")
+	}
+}
+
+func TestUndoableMoveHeadOnCollision(t *testing.T) {
+	board := NewGameBoard(18, 20)
+	agent1 := NewAgent(1, Position{X: 5, Y: 5}, RIGHT, board)
+	agent2 := NewAgent(2, Position{X: 8, Y: 5}, LEFT, board)
+
+	success, state := agent1.UndoableMove(RIGHT, agent2, false)
+	if success {
+		t.Errorf("Expected head-on collision to fail")
+	}
+	if agent1.Alive || agent2.Alive {
+		t.Errorf("Expected both agents to be dead after head-on collision")
+	}
+
+	agent1.UndoMove(state, agent2)
+
+	if !agent1.Alive || !agent2.Alive {
+		t.Errorf("Expected both agents to be alive after undo")
+	}
+}
+
+func TestUndoableMultipleMoves(t *testing.T) {
+	board := NewGameBoard(18, 20)
+	agent := NewAgent(1, Position{X: 10, Y: 10}, RIGHT, board)
+
+	var states []MoveState
+	moves := []Direction{RIGHT, RIGHT, DOWN, DOWN}
+
+	for _, dir := range moves {
+		_, state := agent.UndoableMove(dir, nil, false)
+		states = append(states, state)
+	}
+
+	if agent.Length != 6 {
+		t.Errorf("Expected length 6 after 4 moves, got %d", agent.Length)
+	}
+
+	for i := len(states) - 1; i >= 0; i-- {
+		agent.UndoMove(states[i], nil)
+	}
+
+	if agent.Length != 2 {
+		t.Errorf("Expected length 2 after undoing all moves, got %d", agent.Length)
+	}
+	if agent.GetHead().X != 11 || agent.GetHead().Y != 10 {
+		t.Errorf("Expected head at (11, 10), got (%d, %d)", agent.GetHead().X, agent.GetHead().Y)
+	}
+}
+
+func TestUndoableDirectionRestore(t *testing.T) {
+	board := NewGameBoard(18, 20)
+	agent := NewAgent(1, Position{X: 5, Y: 5}, RIGHT, board)
+
+	initialDir := agent.Direction
+
+	_, state := agent.UndoableMove(DOWN, nil, false)
+	if agent.Direction.DX != DOWN.DX || agent.Direction.DY != DOWN.DY {
+		t.Errorf("Expected direction to change to DOWN")
+	}
+
+	agent.UndoMove(state, nil)
+	if agent.Direction.DX != initialDir.DX || agent.Direction.DY != initialDir.DY {
+		t.Errorf("Expected direction to restore to original")
+	}
+}

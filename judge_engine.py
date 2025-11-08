@@ -414,7 +414,7 @@ def main():
     # Get agent URLs from environment variables
     PLAYER1_URL = os.getenv("PLAYER1_URL", "http://localhost:5008")
     PLAYER2_URL = os.getenv("PLAYER2_URL", "http://localhost:5009")
-    NUM_ROUNDS = int(os.getenv("NUM_ROUNDS", "1"`1))  # Number of rounds (each round plays both ways)
+    NUM_ROUNDS = int(os.getenv("NUM_ROUNDS", "1"))  # Number of rounds (each round plays both ways)
 
     # Creating judges for both configurations
     print(f"Connecting to agents at {PLAYER1_URL} and {PLAYER2_URL}...")
