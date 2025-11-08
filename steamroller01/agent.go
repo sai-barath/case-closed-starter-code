@@ -27,7 +27,7 @@ var globalGameState GameState
 
 func infoHandler(w http.ResponseWriter, r *http.Request) {
 	participant := getEnv("PARTICIPANT", "SteamrollerParticipant")
-	agentName := getEnv("AGENT_NAME", "SteamrollerAgent")
+	agentName := getEnv("AGENT_NAME", "SteamrollerAgentV0")
 	
 	response := map[string]string{
 		"participant": participant,

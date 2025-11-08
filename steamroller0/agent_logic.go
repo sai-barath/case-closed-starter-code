@@ -138,14 +138,15 @@ func iterativeDeepeningSearch(snapshot GameStateSnapshot, ctx SearchContext) Mov
 }
 
 // ============================================================================
-// YOUR LOGIC: Search at a specific depth
-// **CUSTOMIZE**: Can add alpha-beta pruning or move ordering here
+// YOUR LOGIC: Search at a specific depth with alpha-beta pruning
 // ============================================================================
 
 func searchAtDepth(snapshot GameStateSnapshot, maxDepth int, ctx SearchContext) Move {
 	validMoves := snapshot.myAgent.GetValidMoves()
 	
 	bestMove := Move{direction: validMoves[0], useBoost: false, score: math.MinInt32}
+	alpha := math.MinInt32
+	beta := math.MaxInt32
 	
 	// Try each direction
 	for _, dir := range validMoves {
@@ -163,8 +164,8 @@ func searchAtDepth(snapshot GameStateSnapshot, maxDepth int, ctx SearchContext) 
 				return bestMove
 			}
 			
-			// Evaluate this move by looking ahead
-			score := evaluateMoveAtDepth(snapshot, dir, useBoost, maxDepth, ctx)
+			// Evaluate this move by looking ahead with alpha-beta
+			score := evaluateMoveAtDepth(snapshot, dir, useBoost, maxDepth, alpha, beta, ctx)
 			
 			if score > bestMove.score {
 				bestMove = Move{
@@ -172,6 +173,12 @@ func searchAtDepth(snapshot GameStateSnapshot, maxDepth int, ctx SearchContext) 
 					useBoost:  useBoost,
 					score:     score,
 				}
+				alpha = score
+			}
+			
+			// Alpha-beta cutoff
+			if alpha >= beta {
+				return bestMove
 			}
 		}
 	}
@@ -240,16 +247,16 @@ func createAgentFromTrail(agentID int, trail [][]int, dir Direction, boosts int,
 }
 
 // ============================================================================
-// BOILERPLATE: Simulate a move and evaluate it
+// BOILERPLATE: Simulate a move and evaluate it with alpha-beta
 // Uses undo pattern instead of cloning for better performance
 // ============================================================================
 
-func evaluateMoveAtDepth(snapshot GameStateSnapshot, dir Direction, useBoost bool, maxDepth int, ctx SearchContext) int {
+func evaluateMoveAtDepth(snapshot GameStateSnapshot, dir Direction, useBoost bool, maxDepth int, alpha int, beta int, ctx SearchContext) int {
 	// Make the move using undo pattern (much faster than Clone)
 	_, myState := snapshot.myAgent.UndoableMove(dir, snapshot.otherAgent, useBoost)
 	
-	// Use minimax to evaluate the resulting position
-	score := minimax(snapshot.board, snapshot.myAgent, snapshot.otherAgent, maxDepth, true, ctx)
+	// Use minimax with alpha-beta to evaluate the resulting position
+	score := alphabeta(snapshot.board, snapshot.myAgent, snapshot.otherAgent, maxDepth, alpha, beta, true, ctx)
 	
 	// Undo the move to restore original state
 	snapshot.myAgent.UndoMove(myState, snapshot.otherAgent)
@@ -258,9 +265,100 @@ func evaluateMoveAtDepth(snapshot GameStateSnapshot, dir Direction, useBoost boo
 }
 
 // ============================================================================
-// BOILERPLATE: Minimax algorithm (assumes opponent plays optimally)
+// Alpha-Beta Pruning Algorithm (optimized minimax)
 // Uses undo pattern for efficiency - no expensive cloning!
-// **CUSTOMIZE**: Can add alpha-beta pruning here for even better performance
+// ============================================================================
+
+func alphabeta(board *GameBoard, myAgent *Agent, otherAgent *Agent, depth int, alpha int, beta int, isMaximizing bool, ctx SearchContext) int {
+	// Stop if time expired
+	if ctx.timeExpired() {
+		return evaluatePosition(myAgent, otherAgent)
+	}
+	
+	// Base case: reached leaf node or game over
+	if depth == 0 || !myAgent.Alive || !otherAgent.Alive {
+		return evaluatePosition(myAgent, otherAgent)
+	}
+	
+	if isMaximizing {
+		// Maximizing player (us): pick best move
+		maxScore := math.MinInt32
+		
+		for _, dir := range myAgent.GetValidMoves() {
+			if ctx.timeExpired() {
+				return maxScore
+			}
+			
+			// Simulate our move using undo pattern
+			_, myState := myAgent.UndoableMove(dir, otherAgent, false)
+			
+			// Recurse: opponent's turn
+			score := alphabeta(board, myAgent, otherAgent, depth-1, alpha, beta, false, ctx)
+			
+			// Undo the move
+			myAgent.UndoMove(myState, otherAgent)
+			
+			if score > maxScore {
+				maxScore = score
+			}
+			
+			// Alpha-beta pruning
+			alpha = max(alpha, score)
+			if beta <= alpha {
+				break // Beta cutoff
+			}
+		}
+		
+		return maxScore
+	} else {
+		// Minimizing player (opponent): assumes they play optimally
+		minScore := math.MaxInt32
+		
+		for _, dir := range otherAgent.GetValidMoves() {
+			if ctx.timeExpired() {
+				return minScore
+			}
+			
+			// Simulate opponent's move using undo pattern
+			_, otherState := otherAgent.UndoableMove(dir, myAgent, false)
+			
+			// Recurse: our turn
+			score := alphabeta(board, myAgent, otherAgent, depth-1, alpha, beta, true, ctx)
+			
+			// Undo the move
+			otherAgent.UndoMove(otherState, myAgent)
+			
+			if score < minScore {
+				minScore = score
+			}
+			
+			// Alpha-beta pruning
+			beta = min(beta, score)
+			if beta <= alpha {
+				break // Alpha cutoff
+			}
+		}
+		
+		return minScore
+	}
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// ============================================================================
+// BOILERPLATE: Old minimax kept for reference (not used anymore)
 // ============================================================================
 
 func minimax(board *GameBoard, myAgent *Agent, otherAgent *Agent, depth int, isMaximizing bool, ctx SearchContext) int {
@@ -331,7 +429,6 @@ func minimax(board *GameBoard, myAgent *Agent, otherAgent *Agent, depth int, isM
 // ============================================================================
 
 func evaluatePosition(myAgent *Agent, otherAgent *Agent) int {
-	// Terminal states (game over)
 	if !myAgent.Alive && !otherAgent.Alive {
 		return DRAW_SCORE
 	}
@@ -344,25 +441,63 @@ func evaluatePosition(myAgent *Agent, otherAgent *Agent) int {
 		return WIN_SCORE
 	}
 	
-	// Non-terminal state: use heuristics to evaluate position
 	score := 0
 	
-	// **CUSTOMIZE**: Current heuristic is simple:
-	// 1. Prefer longer trail (10 points per cell)
-	score += myAgent.Length * 10
-	score -= otherAgent.Length * 10
+	myHead := myAgent.GetHead()
+	opponentHead := otherAgent.GetHead()
 	
-	// 2. Prefer more available space (5 points per reachable cell)
 	mySpace := countAvailableSpace(myAgent)
-	otherSpace := countAvailableSpace(otherAgent)
-	score += (mySpace - otherSpace) * 5
+	opponentSpace := countAvailableSpace(otherAgent)
 	
-	// **TODO**: You can add more heuristics here:
-	// - Distance to opponent
-	// - Control of center
-	// - Number of escape routes
-	// - Wall proximity
-	// - Territory control
+	territoryResult := voronoiTerritory(myAgent, otherAgent)
+	myTerritory := territoryResult.myTerritory
+	opponentTerritory := territoryResult.opponentTerritory
+	
+	score += (myTerritory - opponentTerritory) * 15
+	
+	spaceDiff := mySpace - opponentSpace
+	if spaceDiff > 50 {
+		score += 3000
+	} else if spaceDiff < -50 {
+		score -= 3000
+	} else {
+		score += spaceDiff * 25
+	}
+	
+	score += myAgent.Length * 8
+	score -= otherAgent.Length * 8
+	
+	dist := manhattanDistance(myHead, opponentHead)
+	if mySpace > opponentSpace {
+		score += dist * 3
+	} else if mySpace < opponentSpace {
+		score -= dist * 5
+	}
+	
+	centerX, centerY := BOARD_WIDTH/2, BOARD_HEIGHT/2
+	myCenterDist := manhattanDistanceRaw(myHead.X, myHead.Y, centerX, centerY)
+	opponentCenterDist := manhattanDistanceRaw(opponentHead.X, opponentHead.Y, centerX, centerY)
+	score += (opponentCenterDist - myCenterDist) * 2
+	
+	myFreedom := countFreedomDegree(myAgent)
+	opponentFreedom := countFreedomDegree(otherAgent)
+	score += (myFreedom - opponentFreedom) * 40
+	
+	myTightness := measureTightness(myAgent)
+	opponentTightness := measureTightness(otherAgent)
+	score += (opponentTightness - myTightness) * 20
+	
+	myCornerPenalty := cornerProximityPenalty(myHead)
+	opponentCornerPenalty := cornerProximityPenalty(opponentHead)
+	score += (opponentCornerPenalty - myCornerPenalty) * 15
+	
+	if myAgent.BoostsRemaining > 0 && otherAgent.BoostsRemaining == 0 {
+		score += 100
+	}
+	
+	myBlockingScore := blockingPositionScore(myAgent, otherAgent)
+	opponentBlockingScore := blockingPositionScore(otherAgent, myAgent)
+	score += (myBlockingScore - opponentBlockingScore) * 8
 	
 	return score
 }
@@ -382,8 +517,7 @@ func countAvailableSpace(agent *Agent) int {
 	visited[head] = true
 	count := 0
 	
-	// BFS to count reachable cells (capped at 50 for performance)
-	for len(queue) > 0 && count < 50 {
+	for len(queue) > 0 && count < 150 {
 		current := queue[0]
 		queue = queue[1:]
 		count++
@@ -403,6 +537,211 @@ func countAvailableSpace(agent *Agent) int {
 	}
 	
 	return count
+}
+
+type VoronoiResult struct {
+	myTerritory       int
+	opponentTerritory int
+}
+
+func voronoiTerritory(myAgent *Agent, opponentAgent *Agent) VoronoiResult {
+	myHead := myAgent.GetHead()
+	opponentHead := opponentAgent.GetHead()
+	
+	myQueue := []Position{myHead}
+	opponentQueue := []Position{opponentHead}
+	
+	myVisited := make(map[Position]int)
+	opponentVisited := make(map[Position]int)
+	
+	myVisited[myHead] = 0
+	opponentVisited[opponentHead] = 0
+	
+	maxSteps := 30
+	
+	for step := 0; step < maxSteps; step++ {
+		nextMyQueue := []Position{}
+		for _, pos := range myQueue {
+			for _, dir := range AllDirections {
+				next := Position{X: pos.X + dir.DX, Y: pos.Y + dir.DY}
+				next = myAgent.Board.TorusCheck(next)
+				
+				if myAgent.Board.GetCellState(next) == EMPTY {
+					if _, visited := myVisited[next]; !visited {
+						myVisited[next] = step + 1
+						nextMyQueue = append(nextMyQueue, next)
+					}
+				}
+			}
+		}
+		myQueue = nextMyQueue
+		
+		nextOpponentQueue := []Position{}
+		for _, pos := range opponentQueue {
+			for _, dir := range AllDirections {
+				next := Position{X: pos.X + dir.DX, Y: pos.Y + dir.DY}
+				next = opponentAgent.Board.TorusCheck(next)
+				
+				if opponentAgent.Board.GetCellState(next) == EMPTY {
+					if _, visited := opponentVisited[next]; !visited {
+						opponentVisited[next] = step + 1
+						nextOpponentQueue = append(nextOpponentQueue, next)
+					}
+				}
+			}
+		}
+		opponentQueue = nextOpponentQueue
+	}
+	
+	myTerritory := 0
+	opponentTerritory := 0
+	
+	for pos, myDist := range myVisited {
+		if opponentDist, opponentReached := opponentVisited[pos]; opponentReached {
+			if myDist < opponentDist {
+				myTerritory++
+			} else if opponentDist < myDist {
+				opponentTerritory++
+			}
+		} else {
+			myTerritory++
+		}
+	}
+	
+	for pos := range opponentVisited {
+		if _, myReached := myVisited[pos]; !myReached {
+			opponentTerritory++
+		}
+	}
+	
+	return VoronoiResult{
+		myTerritory:       myTerritory,
+		opponentTerritory: opponentTerritory,
+	}
+}
+
+func countFreedomDegree(agent *Agent) int {
+	if !agent.Alive {
+		return 0
+	}
+	
+	head := agent.GetHead()
+	freeCount := 0
+	
+	for _, dir := range AllDirections {
+		next := Position{X: head.X + dir.DX, Y: head.Y + dir.DY}
+		next = agent.Board.TorusCheck(next)
+		
+		if agent.Board.GetCellState(next) == EMPTY {
+			freeCount++
+		}
+	}
+	
+	return freeCount
+}
+
+func measureTightness(agent *Agent) int {
+	if !agent.Alive {
+		return 0
+	}
+	
+	head := agent.GetHead()
+	tightness := 0
+	
+	for dx := -2; dx <= 2; dx++ {
+		for dy := -2; dy <= 2; dy++ {
+			if dx == 0 && dy == 0 {
+				continue
+			}
+			pos := Position{X: head.X + dx, Y: head.Y + dy}
+			pos = agent.Board.TorusCheck(pos)
+			
+			if agent.Board.GetCellState(pos) == AGENT {
+				tightness++
+			}
+		}
+	}
+	
+	return tightness
+}
+
+func cornerProximityPenalty(pos Position) int {
+	corners := []Position{
+		{X: 0, Y: 0},
+		{X: BOARD_WIDTH - 1, Y: 0},
+		{X: 0, Y: BOARD_HEIGHT - 1},
+		{X: BOARD_WIDTH - 1, Y: BOARD_HEIGHT - 1},
+	}
+	
+	minDist := math.MaxInt32
+	for _, corner := range corners {
+		dist := manhattanDistanceRaw(pos.X, pos.Y, corner.X, corner.Y)
+		if dist < minDist {
+			minDist = dist
+		}
+	}
+	
+	if minDist <= 2 {
+		return 50 - minDist*10
+	}
+	
+	return 0
+}
+
+func blockingPositionScore(agent *Agent, opponent *Agent) int {
+	if !agent.Alive || !opponent.Alive {
+		return 0
+	}
+	
+	myHead := agent.GetHead()
+	opponentHead := opponent.GetHead()
+	
+	dist := manhattanDistance(myHead, opponentHead)
+	
+	if dist <= 5 {
+		opponentValidMoves := 0
+		for _, dir := range opponent.GetValidMoves() {
+			next := Position{X: opponentHead.X + dir.DX, Y: opponentHead.Y + dir.DY}
+			next = opponent.Board.TorusCheck(next)
+			
+			if opponent.Board.GetCellState(next) == EMPTY {
+				opponentValidMoves++
+			}
+		}
+		
+		if opponentValidMoves <= 1 {
+			return 100
+		} else if opponentValidMoves == 2 {
+			return 30
+		}
+	}
+	
+	return 0
+}
+
+func manhattanDistance(p1, p2 Position) int {
+	return manhattanDistanceRaw(p1.X, p1.Y, p2.X, p2.Y)
+}
+
+func manhattanDistanceRaw(x1, y1, x2, y2 int) int {
+	dx := abs(x1 - x2)
+	dy := abs(y1 - y2)
+	
+	if dx > BOARD_WIDTH/2 {
+		dx = BOARD_WIDTH - dx
+	}
+	if dy > BOARD_HEIGHT/2 {
+		dy = BOARD_HEIGHT - dy
+	}
+	
+	return dx + dy
+}
+
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 // ============================================================================
