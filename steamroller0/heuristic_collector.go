@@ -13,6 +13,11 @@ type HeuristicSnapshot struct {
 	ReachableDiff      int
 	BoostDiff          int
 	ChamberScore       int
+	EdgeDiff           int
+	CompactnessDiff    int
+	CutoffScore        int
+	GrowthDiff         int
+	ChokePointScore    int
 	HeadDistance       int
 	Separated          bool
 	P1ComponentSize    int
@@ -77,7 +82,7 @@ func (gr *GameRecorder) RecordTurn(myAgent *Agent, otherAgent *Agent, turnCount 
 	}
 
 	// Calculate all heuristics
-	myTerritory, oppTerritory, _ := calculateVoronoiControl(myAgent, otherAgent)
+	myTerritory, oppTerritory, control := calculateVoronoiControl(myAgent, otherAgent)
 	territoryDiff := myTerritory - oppTerritory
 
 	myValidMoves := myAgent.GetValidMoves()
@@ -93,6 +98,22 @@ func (gr *GameRecorder) RecordTurn(myAgent *Agent, otherAgent *Agent, turnCount 
 	ct := NewChamberTree(myAgent.Board)
 	chamberScore := ct.EvaluateChamberTree(myHead, oppHead)
 
+	myEdgeBonus := calculateEdgeBonus(myAgent.Board, control, 1)
+	oppEdgeBonus := calculateEdgeBonus(otherAgent.Board, control, 2)
+	edgeDiff := myEdgeBonus - oppEdgeBonus
+
+	myCompactness := evaluateCompactness(myAgent, control, 1)
+	oppCompactness := evaluateCompactness(otherAgent, control, 2)
+	compactnessDiff := myCompactness - oppCompactness
+
+	cutoffScore := evaluateCutoffOpportunities(myAgent, otherAgent, control)
+
+	myGrowthPotential := evaluateSpaceGrowth(myAgent, otherAgent, control, 1)
+	oppGrowthPotential := evaluateSpaceGrowth(otherAgent, myAgent, control, 2)
+	growthDiff := myGrowthPotential - oppGrowthPotential
+
+	chokeScore := evaluateChokePoints(myAgent, otherAgent, control)
+
 	headDist := torusDistance(myHead, oppHead, myAgent.Board)
 
 	snapshot := HeuristicSnapshot{
@@ -102,6 +123,11 @@ func (gr *GameRecorder) RecordTurn(myAgent *Agent, otherAgent *Agent, turnCount 
 		ReachableDiff:   reachableDiff,
 		BoostDiff:       boostDiff,
 		ChamberScore:    chamberScore,
+		EdgeDiff:        edgeDiff,
+		CompactnessDiff: compactnessDiff,
+		CutoffScore:     cutoffScore,
+		GrowthDiff:      growthDiff,
+		ChokePointScore: chokeScore,
 		HeadDistance:    headDist,
 		Separated:       separated,
 		P1ComponentSize: p1CompSize,
@@ -157,6 +183,11 @@ func (gr *GameRecorder) WriteToCSV(filename string, append bool) error {
 			"reachable_diff",
 			"boost_diff",
 			"chamber_score",
+			"edge_diff",
+			"compactness_diff",
+			"cutoff_score",
+			"growth_diff",
+			"choke_point_score",
 			"head_distance",
 			"p1_valid_moves",
 			"p2_valid_moves",
@@ -177,6 +208,11 @@ func (gr *GameRecorder) WriteToCSV(filename string, append bool) error {
 				fmt.Sprintf("%d", snap.ReachableDiff),
 				fmt.Sprintf("%d", snap.BoostDiff),
 				fmt.Sprintf("%d", snap.ChamberScore),
+				fmt.Sprintf("%d", snap.EdgeDiff),
+				fmt.Sprintf("%d", snap.CompactnessDiff),
+				fmt.Sprintf("%d", snap.CutoffScore),
+				fmt.Sprintf("%d", snap.GrowthDiff),
+				fmt.Sprintf("%d", snap.ChokePointScore),
 				fmt.Sprintf("%d", snap.HeadDistance),
 				fmt.Sprintf("%d", snap.P1ValidMoves),
 				fmt.Sprintf("%d", snap.P2ValidMoves),

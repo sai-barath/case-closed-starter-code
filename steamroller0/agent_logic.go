@@ -26,6 +26,10 @@ var (
 	WEIGHT_REACHABLE      = 136
 	WEIGHT_BOOST          = 14
 	WEIGHT_CHAMBER        = 30
+	WEIGHT_EDGE           = 5
+	WEIGHT_COMPACTNESS    = 25
+	WEIGHT_CUTOFF         = 12
+	WEIGHT_GROWTH         = 30
 	PENALTY_CORRIDOR_BASE = 500
 	PENALTY_HEAD_DISTANCE = 200
 )
@@ -365,7 +369,7 @@ func evaluatePosition(myAgent *Agent, otherAgent *Agent, turnCount int) int {
 
 	weights := getDynamicWeights(turnCount)
 
-	myTerritory, oppTerritory, _ := calculateVoronoiControl(myAgent, otherAgent)
+	myTerritory, oppTerritory, control := calculateVoronoiControl(myAgent, otherAgent)
 	territoryDiff := myTerritory - oppTerritory
 
 	myFreedom := len(myValidMoves)
@@ -385,8 +389,17 @@ func evaluatePosition(myAgent *Agent, otherAgent *Agent, turnCount int) int {
 	chamberScore := ct.EvaluateChamberTree(myHead, oppHead)
 	score += chamberScore * weights.chamber
 
-	myTrapPenalty := detectCorridorTraps(myAgent)
-	oppTrapPenalty := detectCorridorTraps(otherAgent)
+	myEdgeBonus := calculateEdgeBonus(myAgent.Board, control, 1)
+	oppEdgeBonus := calculateEdgeBonus(otherAgent.Board, control, 2)
+	edgeDiff := myEdgeBonus - oppEdgeBonus
+	score += edgeDiff * weights.edge
+
+	myCompactness := evaluateCompactness(myAgent, control, 1)
+	oppCompactness := evaluateCompactness(otherAgent, control, 2)
+	score += (myCompactness - oppCompactness) * weights.compactness
+
+	myTrapPenalty := detectCorridorTraps(myAgent, otherAgent)
+	oppTrapPenalty := detectCorridorTraps(otherAgent, myAgent)
 	score += (oppTrapPenalty - myTrapPenalty)
 
 	headDistance := torusDistance(myHead, oppHead, myAgent.Board)
@@ -396,68 +409,142 @@ func evaluatePosition(myAgent *Agent, otherAgent *Agent, turnCount int) int {
 		score -= PENALTY_HEAD_DISTANCE / 4
 	}
 
+	cutoffScore := evaluateCutoffOpportunities(myAgent, otherAgent, control)
+	score += cutoffScore * weights.cutoff
+
+	myGrowthPotential := evaluateSpaceGrowth(myAgent, otherAgent, control, 1)
+	oppGrowthPotential := evaluateSpaceGrowth(otherAgent, myAgent, control, 2)
+	score += (myGrowthPotential - oppGrowthPotential) * weights.growth
+
+	chokeScore := evaluateChokePoints(myAgent, otherAgent, control)
+	score += chokeScore * weights.chokePoint
+
 	return score
 }
 
-func detectCorridorTraps(agent *Agent) int {
+// detectCorridorTraps simulates future moves to detect if agent is in a narrow corridor with no escape
+// Returns penalty score: higher = more trapped
+func detectCorridorTraps(agent *Agent, opponent *Agent) int {
 	if !agent.Alive {
 		return 0
 	}
 
+	// Quick check: if we currently have 3-4 moves, we're probably not in a corridor
 	currentMoves := agent.GetValidMoves()
 	if len(currentMoves) >= 3 {
-		return 0
+		return 0 // Not in a corridor
 	}
 
 	if len(currentMoves) == 0 {
-		return PENALTY_CORRIDOR_BASE * 10
+		return PENALTY_CORRIDOR_BASE * 10 // Already trapped
 	}
 
-	head := agent.GetHead()
-	minNextMoves := 4
+	// Simulate 3 moves ahead checking mobility at each step
+	penalty := 0
+	testBoard := agent.Board.Clone()
+	testAgent := agent.Clone(testBoard)
+	testOpponent := opponent.Clone(testBoard)
 
-	for _, dir := range currentMoves {
-		nextPos := Position{
-			X: head.X + dir.DX,
-			Y: head.Y + dir.DY,
+	// Try all possible move sequences (limited depth to save performance)
+	minFutureMobility := 4 // Best case: 4 valid moves
+	validMovesAtDepth := []int{}
+
+	// Depth 1
+	for _, move1 := range currentMoves {
+		// Clone for each branch
+		b1 := testBoard.Clone()
+		a1 := testAgent.Clone(b1)
+		o1 := testOpponent.Clone(b1)
+
+		success := a1.Move(move1, o1, false)
+		if !success || !a1.Alive {
+			continue
 		}
-		nextPos = agent.Board.TorusCheck(nextPos)
 
-		nextMoveCount := 0
-		for _, nextDir := range AllDirections {
-			if nextDir.DX == -dir.DX && nextDir.DY == -dir.DY {
+		moves1 := a1.GetValidMoves()
+		validMovesAtDepth = append(validMovesAtDepth, len(moves1))
+		if len(moves1) < minFutureMobility {
+			minFutureMobility = len(moves1)
+		}
+
+		if len(moves1) == 0 {
+			continue // Dead end after 1 move
+		}
+
+		// Depth 2 - only explore up to 2 moves at this level to save time
+		maxMovesToCheck := 2
+		if len(moves1) < maxMovesToCheck {
+			maxMovesToCheck = len(moves1)
+		}
+
+		for i := 0; i < maxMovesToCheck; i++ {
+			move2 := moves1[i]
+			b2 := b1.Clone()
+			a2 := a1.Clone(b2)
+			o2 := o1.Clone(b2)
+
+			success := a2.Move(move2, o2, false)
+			if !success || !a2.Alive {
 				continue
 			}
 
-			checkPos := Position{
-				X: nextPos.X + nextDir.DX,
-				Y: nextPos.Y + nextDir.DY,
+			moves2 := a2.GetValidMoves()
+			validMovesAtDepth = append(validMovesAtDepth, len(moves2))
+			if len(moves2) < minFutureMobility {
+				minFutureMobility = len(moves2)
 			}
-			checkPos = agent.Board.TorusCheck(checkPos)
 
-			if agent.Board.GetCellState(checkPos) == EMPTY {
-				nextMoveCount++
+			if len(moves2) == 0 {
+				continue // Dead end after 2 moves
 			}
-		}
 
-		if nextMoveCount < minNextMoves {
-			minNextMoves = nextMoveCount
+			// Depth 3 - only check first move
+			if len(moves2) > 0 {
+				b3 := b2.Clone()
+				a3 := a2.Clone(b3)
+				o3 := o2.Clone(b3)
+
+				success := a3.Move(moves2[0], o3, false)
+				if success && a3.Alive {
+					moves3 := a3.GetValidMoves()
+					validMovesAtDepth = append(validMovesAtDepth, len(moves3))
+					if len(moves3) < minFutureMobility {
+						minFutureMobility = len(moves3)
+					}
+				}
+			}
 		}
 	}
 
-	if minNextMoves <= 1 {
-		return PENALTY_CORRIDOR_BASE * 6
-	} else if minNextMoves == 2 {
-		return PENALTY_CORRIDOR_BASE * 2
+	// Analyze mobility trend
+	// If future mobility is consistently low (1-2 moves), we're in a corridor
+	avgFutureMobility := 0
+	if len(validMovesAtDepth) > 0 {
+		sum := 0
+		for _, m := range validMovesAtDepth {
+			sum += m
+		}
+		avgFutureMobility = sum / len(validMovesAtDepth)
 	}
 
-	return 0
+	// Penalty based on how constrained we become
+	if minFutureMobility <= 1 {
+		penalty += PENALTY_CORRIDOR_BASE * 6 // Very bad: will have ≤1 move soon
+	} else if minFutureMobility == 2 && avgFutureMobility*2 < 5 { // avgFutureMobility < 2.5
+		penalty += PENALTY_CORRIDOR_BASE * 3 // Bad: consistently low mobility
+	} else if avgFutureMobility*10 < 20 { // avgFutureMobility < 2.0
+		penalty += PENALTY_CORRIDOR_BASE // Warning: entering narrow area
+	}
+
+	return penalty
 }
 
+// torusDistance calculates Manhattan distance on a torus board
 func torusDistance(p1, p2 Position, board *GameBoard) int {
 	dx := abs(p1.X - p2.X)
 	dy := abs(p1.Y - p2.Y)
 
+	// Torus wraparound - check if going the other way is shorter
 	if dx > board.Width/2 {
 		dx = board.Width - dx
 	}
@@ -466,6 +553,284 @@ func torusDistance(p1, p2 Position, board *GameBoard) int {
 	}
 
 	return dx + dy
+}
+
+// evaluateCutoffOpportunities detects if we can trap opponent by cutting them off
+func evaluateCutoffOpportunities(myAgent *Agent, otherAgent *Agent, control [][]int) int {
+	if !myAgent.Alive || !otherAgent.Alive {
+		return 0
+	}
+
+	oppHead := otherAgent.GetHead()
+
+	// Check if opponent is in a region we can potentially seal off
+	// Count how many cells near opponent we control vs they control
+	oppRegionSize := 0
+	myControlNearOpp := 0
+	oppControlNearOpp := 0
+
+	// BFS from opponent head, limited range
+	visited := make(map[Position]bool)
+	queue := []Position{oppHead}
+	visited[oppHead] = true
+	depth := 0
+	maxDepth := 8
+
+	for len(queue) > 0 && depth < maxDepth {
+		levelSize := len(queue)
+		for i := 0; i < levelSize; i++ {
+			current := queue[0]
+			queue = queue[1:]
+			oppRegionSize++
+
+			for _, dir := range AllDirections {
+				next := Position{
+					X: current.X + dir.DX,
+					Y: current.Y + dir.DY,
+				}
+				next = myAgent.Board.TorusCheck(next)
+
+				state := myAgent.Board.GetCellState(next)
+
+				if state == EMPTY {
+					if !visited[next] {
+						visited[next] = true
+						queue = append(queue, next)
+					}
+
+					// Check who controls the border
+					if control[next.Y][next.X] == 1 {
+						myControlNearOpp++
+					} else if control[next.Y][next.X] == 2 {
+						oppControlNearOpp++
+					}
+				} else if myAgent.ContainsPosition(next) {
+					// Our trail is a barrier
+					myControlNearOpp += 2
+				}
+			}
+		}
+		depth++
+	}
+
+	// If we control more of the border around opponent, we have a cutoff opportunity
+	if myControlNearOpp > oppControlNearOpp*2 && oppRegionSize < 30 {
+		return 5 // Good cutoff opportunity
+	} else if myControlNearOpp > oppControlNearOpp {
+		return 2 // Moderate cutoff potential
+	}
+
+	return 0
+}
+
+// evaluateSpaceGrowth estimates how much space an agent can expand into
+// This is different from countReachableSpace - it considers growth *direction*
+func evaluateSpaceGrowth(agent *Agent, opponent *Agent, control [][]int, playerID int) int {
+	if !agent.Alive {
+		return 0
+	}
+
+	head := agent.GetHead()
+	growthScore := 0
+
+	// Check each direction from head
+	for _, dir := range AllDirections {
+		next := Position{
+			X: head.X + dir.DX,
+			Y: head.Y + dir.DY,
+		}
+		next = agent.Board.TorusCheck(next)
+
+		if agent.Board.GetCellState(next) != EMPTY {
+			continue
+		}
+
+		// BFS in this direction to see how much space opens up
+		visited := make(map[Position]bool)
+		queue := []Position{next}
+		visited[next] = true
+		directionSpace := 0
+		controlledSpace := 0
+		maxDepth := 10
+
+		for len(queue) > 0 && directionSpace < maxDepth {
+			current := queue[0]
+			queue = queue[1:]
+			directionSpace++
+
+			if control[current.Y][current.X] == playerID {
+				controlledSpace++
+			}
+
+			for _, d := range AllDirections {
+				nextPos := Position{
+					X: current.X + d.DX,
+					Y: current.Y + d.DY,
+				}
+				nextPos = agent.Board.TorusCheck(nextPos)
+
+				if !visited[nextPos] && agent.Board.GetCellState(nextPos) == EMPTY {
+					visited[nextPos] = true
+					queue = append(queue, nextPos)
+				}
+			}
+		}
+
+		// Reward directions that lead to open space we control
+		if directionSpace > 5 && controlledSpace > directionSpace/2 {
+			growthScore += 3
+		} else if directionSpace > 3 {
+			growthScore += 1
+		}
+	}
+
+	return growthScore
+}
+
+// evaluateCompactness measures how efficiently an agent is filling its controlled territory
+// Higher scores = fewer gaps, more efficient space usage
+func evaluateCompactness(agent *Agent, control [][]int, playerID int) int {
+	if !agent.Alive {
+		return 0
+	}
+
+	head := agent.GetHead()
+	compactness := 0
+
+	// BFS from head to find nearby cells we control
+	visited := make(map[Position]bool)
+	queue := []Position{head}
+	visited[head] = true
+	depth := 0
+	maxDepth := 8 // Look ahead 8 cells
+
+	for len(queue) > 0 && depth < maxDepth {
+		levelSize := len(queue)
+		for i := 0; i < levelSize; i++ {
+			current := queue[0]
+			queue = queue[1:]
+
+			// Count neighbors in our controlled territory
+			controlledNeighbors := 0
+			emptyNeighbors := 0
+
+			for _, dir := range AllDirections {
+				next := Position{
+					X: current.X + dir.DX,
+					Y: current.Y + dir.DY,
+				}
+				next = agent.Board.TorusCheck(next)
+
+				state := agent.Board.GetCellState(next)
+
+				if state == EMPTY {
+					if control[next.Y][next.X] == playerID {
+						controlledNeighbors++
+						if !visited[next] {
+							visited[next] = true
+							queue = append(queue, next)
+						}
+					}
+					emptyNeighbors++
+				} else if agent.ContainsPosition(next) {
+					// Neighbor is our own trail
+					controlledNeighbors++
+				}
+			}
+
+			// Reward having many controlled neighbors (compact filling)
+			// Penalize having many empty neighbors we don't control (gaps)
+			if emptyNeighbors > 0 {
+				compactness += (controlledNeighbors * 10) / emptyNeighbors
+			} else {
+				compactness += controlledNeighbors * 10
+			}
+		}
+		depth++
+	}
+
+	return compactness
+}
+
+func evaluateChokePoints(myAgent *Agent, otherAgent *Agent, control [][]int) int {
+	if !myAgent.Alive || !otherAgent.Alive {
+		return 0
+	}
+
+	apf := NewArticulationPointFinder(myAgent.Board)
+	articulationPoints := apf.FindArticulationPoints()
+
+	if len(articulationPoints) == 0 {
+		return 0
+	}
+
+	myHead := myAgent.GetHead()
+	oppHead := otherAgent.GetHead()
+	score := 0
+
+	for ap := range articulationPoints {
+		myDist := torusDistance(myHead, ap, myAgent.Board)
+		oppDist := torusDistance(oppHead, ap, myAgent.Board)
+
+		distAdvantage := oppDist - myDist
+
+		if myDist < oppDist {
+			score += distAdvantage * 50
+
+			if myDist <= 2 {
+				score += 100
+			} else if myDist <= 4 {
+				score += 50
+			}
+		} else if oppDist < myDist {
+			score += distAdvantage * 50
+
+			if oppDist <= 2 {
+				score -= 100
+			}
+		}
+
+		chokeValue := evaluateChokePointValue(ap, myAgent.Board)
+		if chokeValue > 10 {
+			score += distAdvantage * (chokeValue / 10)
+		}
+	}
+
+	return score
+}
+
+func evaluateChokePointValue(chokePoint Position, board *GameBoard) int {
+	originalState := board.GetCellState(chokePoint)
+	board.SetCellState(chokePoint, AGENT)
+
+	cc := NewConnectedComponents(board)
+	cc.Calculate()
+
+	componentSizes := make(map[int]int)
+	for y := 0; y < board.Height; y++ {
+		for x := 0; x < board.Width; x++ {
+			compID := cc.Components[y][x]
+			if compID >= 0 {
+				componentSizes[compID]++
+			}
+		}
+	}
+
+	board.SetCellState(chokePoint, originalState)
+
+	numComponents := len(componentSizes)
+	if numComponents <= 1 {
+		return 0
+	}
+
+	value := 0
+	for _, size := range componentSizes {
+		value += size / 10
+	}
+
+	value += (numComponents - 1) * 20
+
+	return value
 }
 
 func countReachableSpace(agent *Agent, maxDepth int) int {
@@ -676,6 +1041,36 @@ func calculateVoronoiControl(myAgent *Agent, otherAgent *Agent) (int, int, [][]i
 	return myTerritory, oppTerritory, control
 }
 
+func calculateEdgeBonus(board *GameBoard, control [][]int, owner int) int {
+	bonus := 0
+
+	for y := 0; y < board.Height; y++ {
+		for x := 0; x < board.Width; x++ {
+			if control[y][x] != owner {
+				continue
+			}
+
+			pos := Position{X: x, Y: y}
+			cellState := board.GetCellState(pos)
+
+			if cellState != EMPTY {
+				continue
+			}
+
+			for _, dir := range AllDirections {
+				neighbor := Position{X: pos.X + dir.DX, Y: pos.Y + dir.DY}
+				neighbor = board.TorusCheck(neighbor)
+
+				if board.GetCellState(neighbor) == EMPTY {
+					bonus++
+				}
+			}
+		}
+	}
+
+	return bonus
+}
+
 func printVoronoiMap(myAgent *Agent, otherAgent *Agent, control [][]int, bestMove Move) {
 	if !debugMode {
 		return
@@ -725,11 +1120,16 @@ func abs(x int) int {
 }
 
 type WeightSet struct {
-	territory int
-	freedom   int
-	reachable int
-	boost     int
-	chamber   int
+	territory   int
+	freedom     int
+	reachable   int
+	boost       int
+	chamber     int
+	edge        int
+	compactness int
+	cutoff      int
+	growth      int
+	chokePoint  int
 }
 
 func getDynamicWeights(turnCount int) WeightSet {
@@ -741,18 +1141,33 @@ func getDynamicWeights(turnCount int) WeightSet {
 		weights.reachable = WEIGHT_REACHABLE * 2
 		weights.boost = WEIGHT_BOOST
 		weights.chamber = WEIGHT_CHAMBER
+		weights.edge = WEIGHT_EDGE / 2
+		weights.compactness = WEIGHT_COMPACTNESS / 2
+		weights.cutoff = WEIGHT_CUTOFF / 2
+		weights.growth = WEIGHT_GROWTH * 2
+		weights.chokePoint = 20
 	} else if turnCount < 150 {
 		weights.territory = WEIGHT_TERRITORY
 		weights.freedom = WEIGHT_FREEDOM
 		weights.reachable = WEIGHT_REACHABLE
 		weights.boost = WEIGHT_BOOST
 		weights.chamber = WEIGHT_CHAMBER
+		weights.edge = WEIGHT_EDGE
+		weights.compactness = WEIGHT_COMPACTNESS
+		weights.cutoff = WEIGHT_CUTOFF
+		weights.growth = WEIGHT_GROWTH
+		weights.chokePoint = 40
 	} else {
 		weights.territory = WEIGHT_TERRITORY * 2
 		weights.freedom = WEIGHT_FREEDOM / 2
 		weights.reachable = WEIGHT_REACHABLE / 2
 		weights.boost = WEIGHT_BOOST
 		weights.chamber = WEIGHT_CHAMBER * 2
+		weights.edge = WEIGHT_EDGE * 2
+		weights.compactness = WEIGHT_COMPACTNESS * 2
+		weights.cutoff = WEIGHT_CUTOFF * 2
+		weights.growth = WEIGHT_GROWTH / 2
+		weights.chokePoint = 60
 	}
 
 	return weights
