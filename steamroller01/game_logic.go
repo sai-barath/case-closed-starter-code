@@ -161,11 +161,20 @@ func (a *Agent) GetValidMoves() []Direction {
 		return nil
 	}
 	
+	head := a.GetHead()
 	valid := make([]Direction, 0, 4)
 	for _, dir := range AllDirections {
 		if dir.DX == -a.Direction.DX && dir.DY == -a.Direction.DY {
 			continue
 		}
+		
+		nextPos := Position{X: head.X + dir.DX, Y: head.Y + dir.DY}
+		nextPos = a.Board.TorusCheck(nextPos)
+		
+		if a.Board.GetCellState(nextPos) == AGENT {
+			continue
+		}
+		
 		valid = append(valid, dir)
 	}
 	return valid
@@ -340,4 +349,64 @@ func (a *Agent) UndoMove(state MoveState, otherAgent *Agent) {
 	if state.OtherAliveChanged && otherAgent != nil {
 		otherAgent.Alive = state.OldOtherAlive
 	}
+}
+
+type GameResult int
+
+const (
+	Agent1Win GameResult = 1
+	Agent2Win GameResult = 2
+	Draw      GameResult = 3
+)
+
+type Game struct {
+	Board  *GameBoard
+	Agent1 *Agent
+	Agent2 *Agent
+	Turns  int
+}
+
+func NewGame() *Game {
+	board := NewGameBoard(18, 20)
+	agent1 := NewAgent(1, Position{X: 1, Y: 2}, RIGHT, board)
+	agent2 := NewAgent(2, Position{X: 17, Y: 15}, LEFT, board)
+	
+	return &Game{
+		Board:  board,
+		Agent1: agent1,
+		Agent2: agent2,
+		Turns:  0,
+	}
+}
+
+func (g *Game) Step(dir1, dir2 Direction, boost1, boost2 bool) *GameResult {
+	if g.Turns >= 200 {
+		if g.Agent1.Length > g.Agent2.Length {
+			result := Agent1Win
+			return &result
+		} else if g.Agent2.Length > g.Agent1.Length {
+			result := Agent2Win
+			return &result
+		} else {
+			result := Draw
+			return &result
+		}
+	}
+	
+	agentOneAlive := g.Agent1.Move(dir1, g.Agent2, boost1)
+	agentTwoAlive := g.Agent2.Move(dir2, g.Agent1, boost2)
+	
+	if !agentOneAlive && !agentTwoAlive {
+		result := Draw
+		return &result
+	} else if !agentOneAlive {
+		result := Agent2Win
+		return &result
+	} else if !agentTwoAlive {
+		result := Agent1Win
+		return &result
+	}
+	
+	g.Turns++
+	return nil
 }

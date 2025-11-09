@@ -44,6 +44,24 @@ class GameBoard:
         
         return random.choice(empty_cells)
 
+    def tostr(self, agent1_head=None, agent2_head=None) -> str:
+        RED = '\033[31m'
+        BLUE = '\033[34m'
+        RESET = '\033[0m'
+        chars = {EMPTY: '.', AGENT: 'A'}
+        board_str = ""
+        for y in range(self.height):
+            for x in range(self.width):
+                pos = (x, y)
+                if agent1_head and pos == agent1_head:
+                    board_str += f'{RED}A{RESET} '
+                elif agent2_head and pos == agent2_head:
+                    board_str += f'{BLUE}A{RESET} '
+                else:
+                    board_str += chars.get(self.grid[y][x], '?') + ' '
+            board_str += '\n'
+        return board_str
+
     def __str__(self) -> str:
         chars = {EMPTY: '.', AGENT: 'A'}
         board_str = ""
@@ -170,6 +188,11 @@ class Game:
         self.agent1 = Agent(agent_id=1, start_pos=(1, 2), start_dir=Direction.RIGHT, board=self.board)
         self.agent2 = Agent(agent_id=2, start_pos=(17, 15), start_dir=Direction.LEFT, board=self.board)
         self.turns = 0
+    
+    def __str__(self) -> str:
+        agent1_head = self.agent1.trail[-1] if self.agent1.alive and len(self.agent1.trail) > 0 else None
+        agent2_head = self.agent2.trail[-1] if self.agent2.alive and len(self.agent2.trail) > 0 else None
+        return self.board.tostr(agent1_head, agent2_head)
     
     def reset(self):
         """Resets the game to the initial state."""

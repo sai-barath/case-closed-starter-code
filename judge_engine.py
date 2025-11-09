@@ -5,62 +5,77 @@ import os
 from case_closed_game import Game, Direction, GameResult
 import random
 
-class Colors:
-    RED = '\033[91m'
-    BLUE = '\033[94m'
-    GREEN = '\033[92m'
-    YELLOW = '\033[93m'
-    MAGENTA = '\033[95m'
-    CYAN = '\033[96m'
-    RESET = '\033[0m'
-    BOLD = '\033[1m'
-    DIM = '\033[2m'
+class RandomPlayer:
+    def __init__(self, player_id=1):
+        self.player_id = player_id
+    
+    def get_possible_moves(self):
+        """Returns list of all possible directions for agent."""
+        return [Direction.UP, Direction.DOWN, Direction.LEFT, Direction.RIGHT]
+        
+    def get_best_move(self):
+        """Returns a random valid direction."""
+        possible_moves = self.get_possible_moves()
+        return random.choice(possible_moves)
 
-TIMEOUT = 4
+TIMEOUT = 4  # time for each move
 
-class BotInfo:
+class PlayerAgent:
     def __init__(self, participant, agent_name):
         self.participant = participant
         self.agent_name = agent_name
-        self.latency = 0.0
+        self.latency = None
 
 class Judge:
-    def __init__(self, red_url, blue_url):
-        self.red_url = red_url
-        self.blue_url = blue_url
-        self.red_info = None
-        self.blue_info = None
+    def __init__(self, p1_url, p2_url):
+        self.p1_url = p1_url
+        self.p2_url = p2_url
         self.game = Game()
-        self.game_str = ""
-    
-    def connect_to_bots(self):
+        self.p1_agent = None
+        self.p2_agent = None
+        self.game_str = ""  # Track game moves as string
+
+    def check_latency(self):
+        """Check latency for both players and create their agents"""
+        # Check P1
         try:
-            start = time.time()
-            resp = requests.get(self.red_url, timeout=TIMEOUT)
-            if resp.status_code != 200:
+            start_time = time.time()
+            response = requests.get(self.p1_url, timeout=TIMEOUT)
+            end_time = time.time()
+            
+            if response.status_code == 200:
+                data = response.json()
+                self.p1_agent = PlayerAgent(data.get("participant", "Participant1"), 
+                                     data.get("agent_name", "Agent1"))
+                self.p1_agent.latency = (end_time - start_time)
+            else:
                 return False
-            data = resp.json()
-            self.red_info = BotInfo(data.get("participant", "RedPlayer"), data.get("agent_name", "RedAgent"))
-            self.red_info.latency = time.time() - start
+                
         except (requests.RequestException, requests.Timeout):
             return False
-        
+
+        # Check P2
         try:
-            start = time.time()
-            resp = requests.get(self.blue_url, timeout=TIMEOUT)
-            if resp.status_code != 200:
+            start_time = time.time()
+            response = requests.get(self.p2_url, timeout=TIMEOUT)
+            end_time = time.time()
+            
+            if response.status_code == 200:
+                data = response.json()
+                self.p2_agent = PlayerAgent(data.get("participant", "Participant2"), 
+                                     data.get("agent_name", "Agent2"))
+                self.p2_agent.latency = (end_time - start_time)
+            else:
                 return False
-            data = resp.json()
-            self.blue_info = BotInfo(data.get("participant", "BluePlayer"), data.get("agent_name", "BlueAgent"))
-            self.blue_info.latency = time.time() - start
+                
         except (requests.RequestException, requests.Timeout):
             return False
-        
+
         return True
-    
-    def send_state_to_bot(self, color):
-        url = self.red_url if color == "RED" else self.blue_url
-        player_num = 1 if color == "RED" else 2
+
+    def send_state(self, player_num):
+        """Send current game state to a player via POST"""
+        url = self.p1_url if player_num == 1 else self.p2_url
         
         state_data = {
             "board": self.game.board.grid,
@@ -77,104 +92,44 @@ class Judge:
         }
         
         try:
-            resp = requests.post(f"{url}/send-state", json=state_data, timeout=TIMEOUT)
-            return resp.status_code == 200
+            response = requests.post(f"{url}/send-state", json=state_data, timeout=TIMEOUT)
+            return response.status_code == 200
         except (requests.RequestException, requests.Timeout):
             return False
-    
-    def request_move_from_bot(self, color, attempt_num, random_left):
-        url = self.red_url if color == "RED" else self.blue_url
-        player_num = 1 if color == "RED" else 2
+
+    def get_move(self, player_num, attempt_number, random_moves_left):
+        """Request a move from a player via GET with query parameters"""
+        url = self.p1_url if player_num == 1 else self.p2_url
         
+        # Build query parameters for GET request
         params = {
             "player_number": player_num,
-            "attempt_number": attempt_num,
-            "random_moves_left": random_left,
+            "attempt_number": attempt_number,
+            "random_moves_left": random_moves_left,
             "turn_count": self.game.turns,
         }
         
         try:
-            start = time.time()
-            resp = requests.get(f"{url}/send-move", params=params, timeout=TIMEOUT)
-            elapsed = time.time() - start
+            start_time = time.time()
+            response = requests.get(f"{url}/send-move", params=params, timeout=TIMEOUT)
+            end_time = time.time()
             
-            if color == "RED":
-                self.red_info.latency = elapsed
+            if player_num == 1:
+                self.p1_agent.latency = (end_time - start_time)
             else:
-                self.blue_info.latency = elapsed
+                self.p2_agent.latency = (end_time - start_time)
             
-            if resp.status_code == 200:
-                return resp.json().get('move')
-            return None
+            if response.status_code == 200:
+                move = response.json()
+                return move.get('move')
+            else:
+                return None
+                
         except (requests.RequestException, requests.Timeout):
             return None
-    
-    def parse_and_validate_move(self, move_str, color):
-        info = self.red_info if color == "RED" else self.blue_info
-        agent = self.game.agent1 if color == "RED" else self.game.agent2
-        
-        if not isinstance(move_str, str):
-            print(f"Invalid move format from {color} ({info.agent_name}): not a string")
-            return None
-        
-        parts = move_str.upper().split(':')
-        dir_str = parts[0]
-        use_boost = len(parts) > 1 and parts[1] == 'BOOST'
-        
-        dir_map = {'UP': Direction.UP, 'DOWN': Direction.DOWN, 'LEFT': Direction.LEFT, 'RIGHT': Direction.RIGHT}
-        
-        if dir_str not in dir_map:
-            print(f"Invalid direction from {color} ({info.agent_name}): {dir_str}")
-            return None
-        
-        direction = dir_map[dir_str]
-        
-        cur_dx, cur_dy = agent.direction.value
-        req_dx, req_dy = direction.value
-        if (req_dx, req_dy) == (-cur_dx, -cur_dy):
-            print(f"{color} ({info.agent_name}) sent opposite direction, using current direction instead")
-            direction = agent.direction
-            dir_str = {Direction.UP: 'UP', Direction.DOWN: 'DOWN', Direction.LEFT: 'LEFT', Direction.RIGHT: 'RIGHT'}[direction]
-        
-        return (direction, dir_str, use_boost)
-    
-    def display_move(self, color, dir_str, use_boost, is_random):
-        info = self.red_info if color == "RED" else self.blue_info
-        col = Colors.RED if color == "RED" else Colors.BLUE
-        boost_txt = f" {Colors.YELLOW}⚡BOOST{Colors.RESET}" if use_boost else ""
-        rand_txt = f" {Colors.DIM}(random){Colors.RESET}" if is_random else ""
-        print(f"{col}{color} ({info.agent_name}){Colors.RESET}: {Colors.BOLD}{dir_str}{Colors.RESET}{boost_txt}{rand_txt}")
-    
-    def display_board(self):
-        agent1_trail = set(self.game.agent1.get_trail_positions())
-        agent2_trail = set(self.game.agent2.get_trail_positions())
-        agent1_head = self.game.agent1.trail[-1] if self.game.agent1.alive else None
-        agent2_head = self.game.agent2.trail[-1] if self.game.agent2.alive else None
-        
-        print(f"\n{Colors.CYAN}╔{'═' * (self.game.board.width * 2)}╗{Colors.RESET}")
-        
-        for y in range(self.game.board.height):
-            print(f"{Colors.CYAN}║{Colors.RESET}", end='')
-            for x in range(self.game.board.width):
-                pos = (x, y)
-                if pos == agent1_head:
-                    print(f"{Colors.RED}{Colors.BOLD}●{Colors.RESET} ", end='')
-                elif pos == agent2_head:
-                    print(f"{Colors.BLUE}{Colors.BOLD}●{Colors.RESET} ", end='')
-                elif pos in agent1_trail:
-                    print(f"{Colors.RED}◼{Colors.RESET} ", end='')
-                elif pos in agent2_trail:
-                    print(f"{Colors.BLUE}◼{Colors.RESET} ", end='')
-                else:
-                    print(f"{Colors.DIM}·{Colors.RESET} ", end='')
-            print(f"{Colors.CYAN}║{Colors.RESET}")
-        
-        print(f"{Colors.CYAN}╚{'═' * (self.game.board.width * 2)}╝{Colors.RESET}\n")
-        
-        print(f"{Colors.RED}RED ({self.red_info.agent_name}){Colors.RESET}: Trail={self.game.agent1.length} | Alive={self.game.agent1.alive} | Boosts={self.game.agent1.boosts_remaining}")
-        print(f"{Colors.BLUE}BLUE ({self.blue_info.agent_name}){Colors.RESET}: Trail={self.game.agent2.length} | Alive={self.game.agent2.alive} | Boosts={self.game.agent2.boosts_remaining}")
-    
-    def notify_end(self, result):
+
+    def end_game(self, result):
+        """End the game and notify both players"""
         end_data = {
             "board": self.game.board.grid,
             "agent1_trail": self.game.agent1.get_trail_positions(),
@@ -190,218 +145,230 @@ class Judge:
         }
         
         try:
-            requests.post(f"{self.red_url}/end", json=end_data, timeout=TIMEOUT)
-            requests.post(f"{self.blue_url}/end", json=end_data, timeout=TIMEOUT)
-        except:
-            pass
-        
-        if isinstance(result, GameResult):
-            if result == GameResult.AGENT1_WIN:
-                print(f"\n{Colors.GREEN}{Colors.BOLD}🏆 WINNER: RED ({self.red_info.agent_name}) 🏆{Colors.RESET}\n")
-            elif result == GameResult.AGENT2_WIN:
-                print(f"\n{Colors.GREEN}{Colors.BOLD}🏆 WINNER: BLUE ({self.blue_info.agent_name}) 🏆{Colors.RESET}\n")
-            else:
-                print(f"\n{Colors.YELLOW}{Colors.BOLD}⚖️  DRAW ⚖️{Colors.RESET}\n")
-        
-        return result
-
-def get_random_move():
-    return random.choice([Direction.UP, Direction.DOWN, Direction.LEFT, Direction.RIGHT])
-
-def run_game(judge):
-    judge.game.reset()
-    judge.game_str = ""
-    
-    print(f"{Colors.RED}RED ({judge.red_info.agent_name}){Colors.RESET} = game.agent1 at (1,2)")
-    print(f"{Colors.BLUE}BLUE ({judge.blue_info.agent_name}){Colors.RESET} = game.agent2 at (17,15)\n")
-    
-    if not judge.send_state_to_bot("RED") or not judge.send_state_to_bot("BLUE"):
-        print(f"{Colors.RED}Failed to send initial state{Colors.RESET}")
-        return None
-    
-    red_random_left = 5
-    blue_random_left = 5
-    
-    while True:
-        print(f"\n{Colors.BOLD}{'─' * 60}")
-        print(f"Turn {judge.game.turns + 1}")
-        print(f"{'─' * 60}{Colors.RESET}")
-        
-        red_dir = None
-        red_dir_str = None
-        red_boost = False
-        
-        for attempt in range(1, 3):
-            move_str = judge.request_move_from_bot("RED", attempt, red_random_left)
-            if move_str:
-                parsed = judge.parse_and_validate_move(move_str, "RED")
-                if parsed:
-                    red_dir, red_dir_str, red_boost = parsed
-                    judge.display_move("RED", red_dir_str, red_boost, False)
-                    break
+            requests.post(f"{self.p1_url}/end", json=end_data, timeout=TIMEOUT)
+            requests.post(f"{self.p2_url}/end", json=end_data, timeout=TIMEOUT)
+            
+            if isinstance(result, GameResult):
+                if result == GameResult.AGENT1_WIN:
+                    print(f"Winner: Agent 1 ({self.p1_agent.agent_name})")
+                elif result == GameResult.AGENT2_WIN:
+                    print(f"Winner: Agent 2 ({self.p2_agent.agent_name})")
                 else:
-                    print(f"{Colors.RED}RED forfeited (invalid move){Colors.RESET}")
-                    return judge.notify_end(GameResult.AGENT2_WIN)
-            if attempt < 2:
-                print(f"{Colors.DIM}  RED attempt {attempt} failed, retrying...{Colors.RESET}")
-        
-        if not red_dir:
-            if red_random_left > 0:
-                print(f"{Colors.YELLOW}Using random move for RED ({red_random_left} left){Colors.RESET}")
-                red_dir = get_random_move()
-                red_dir_str = {Direction.UP: 'UP', Direction.DOWN: 'DOWN', Direction.LEFT: 'LEFT', Direction.RIGHT: 'RIGHT'}[red_dir]
-                red_boost = False
-                red_random_left -= 1
-                judge.display_move("RED", red_dir_str, red_boost, True)
+                    print("Game ended in a draw")
             else:
-                print(f"{Colors.RED}RED out of random moves, forfeiting{Colors.RESET}")
-                return judge.notify_end(GameResult.AGENT2_WIN)
+                print(f"Game ended: {result}")
+        except (requests.RequestException, requests.Timeout):
+            return False
+
+    def handle_move(self, move, player_num, is_random=False):
+        """Validate and execute a move. Returns 'forfeit' or tuple (valid, boost_flag, direction)"""
         
-        blue_dir = None
-        blue_dir_str = None
-        blue_boost = False
+        # Validate move format
+        if not isinstance(move, str):
+            print(f"Invalid move format by Player {player_num}: move must be a string")
+            return "forfeit"
         
-        for attempt in range(1, 3):
-            move_str = judge.request_move_from_bot("BLUE", attempt, blue_random_left)
-            if move_str:
-                parsed = judge.parse_and_validate_move(move_str, "BLUE")
-                if parsed:
-                    blue_dir, blue_dir_str, blue_boost = parsed
-                    judge.display_move("BLUE", blue_dir_str, blue_boost, False)
-                    break
-                else:
-                    print(f"{Colors.RED}BLUE forfeited (invalid move){Colors.RESET}")
-                    return judge.notify_end(GameResult.AGENT1_WIN)
-            if attempt < 2:
-                print(f"{Colors.DIM}  BLUE attempt {attempt} failed, retrying...{Colors.RESET}")
+        # Parse move - can be "DIRECTION" or "DIRECTION:BOOST"
+        move_parts = move.upper().split(':')
+        direction_str = move_parts[0]
+        use_boost = len(move_parts) > 1 and move_parts[1] == 'BOOST'
         
-        if not blue_dir:
-            if blue_random_left > 0:
-                print(f"{Colors.YELLOW}Using random move for BLUE ({blue_random_left} left){Colors.RESET}")
-                blue_dir = get_random_move()
-                blue_dir_str = {Direction.UP: 'UP', Direction.DOWN: 'DOWN', Direction.LEFT: 'LEFT', Direction.RIGHT: 'RIGHT'}[blue_dir]
-                blue_boost = False
-                blue_random_left -= 1
-                judge.display_move("BLUE", blue_dir_str, blue_boost, True)
-            else:
-                print(f"{Colors.RED}BLUE out of random moves, forfeiting{Colors.RESET}")
-                return judge.notify_end(GameResult.AGENT1_WIN)
+        # Convert move string to Direction
+        direction_map = {
+            'UP': Direction.UP,
+            'DOWN': Direction.DOWN,
+            'LEFT': Direction.LEFT,
+            'RIGHT': Direction.RIGHT,
+        }
         
-        result = judge.game.step(red_dir, blue_dir, red_boost, blue_boost)
+        if direction_str not in direction_map:
+            print(f"Invalid direction by Player {player_num}: {direction_str}")
+            return "forfeit"
         
-        judge.send_state_to_bot("RED")
-        judge.send_state_to_bot("BLUE")
+        direction = direction_map[direction_str]
         
-        judge.display_board()
+        # Check if move is opposite to current direction (invalid move)
+        agent = self.game.agent1 if player_num == 1 else self.game.agent2
+        current_dir = agent.direction
         
-        if result is not None:
-            judge.notify_end(result)
-            print(f"{Colors.DIM}Game String: {judge.game_str}{Colors.RESET}")
-            return result
+        # Check if requested direction is opposite to current
+        cur_dx, cur_dy = current_dir.value
+        req_dx, req_dy = direction.value
+        if (req_dx, req_dy) == (-cur_dx, -cur_dy):
+            print(f"Player {player_num} attempted invalid move (opposite direction). Using current direction instead.")
+            direction = current_dir
+            direction_str = {Direction.UP: 'UP', Direction.DOWN: 'DOWN', 
+                           Direction.LEFT: 'LEFT', Direction.RIGHT: 'RIGHT'}[direction]
         
-        if judge.game.turns >= 500:
-            print(f"{Colors.YELLOW}Max turns reached{Colors.RESET}")
-            result = judge.notify_end(GameResult.DRAW)
-            print(f"{Colors.DIM}Game String: {judge.game_str}{Colors.RESET}")
-            return result
+        print(f"Player {player_num}'s move: {direction_str}{' (BOOST)' if use_boost else ''}{' (RANDOM)' if is_random else ''}")
         
-        time.sleep(0.1)
+        # Record move in game string with improved format
+        move_abbrev = {'UP': 'U', 'DOWN': 'D', 'LEFT': 'L', 'RIGHT': 'R'}
+        boost_marker = 'B' if use_boost else ''
+        random_marker = 'R' if is_random else ''
+        self.game_str += f"{player_num}{move_abbrev[direction_str]}{boost_marker}{random_marker}-"
+        
+        return (True, use_boost, direction)  # Return tuple: (valid, boost_flag, direction)
+            
 
 def main():
-    print(f"\n{Colors.BOLD}{Colors.CYAN}")
-    print("╔════════════════════════════════════════════════════════════╗")
-    print("║          CASE CLOSED - JUDGE ENGINE v3.0                  ║")
-    print("╚════════════════════════════════════════════════════════════╝")
-    print(f"{Colors.RESET}\n")
-    
-    PLAYER1_URL = os.getenv("PLAYER1_URL", "http://localhost:5008")
-    PLAYER2_URL = os.getenv("PLAYER2_URL", "http://localhost:5009")
-    NUM_ROUNDS = int(os.getenv("NUM_ROUNDS", "1"))
-    
-    print(f"Connecting to Player1={PLAYER1_URL} and Player2={PLAYER2_URL}...")
-    
-    temp_judge = Judge(PLAYER1_URL, PLAYER2_URL)
-    if not temp_judge.connect_to_bots():
-        print(f"{Colors.RED}Failed to connect{Colors.RESET}")
-        return
-    
-    player1_name = temp_judge.red_info.agent_name
-    player1_participant = temp_judge.red_info.participant
-    player2_name = temp_judge.blue_info.agent_name
-    player2_participant = temp_judge.blue_info.participant
-    
-    print(f"\n{Colors.GREEN}✓ Connected!{Colors.RESET}")
-    print(f"Player 1: {player1_name} ({player1_participant})")
-    print(f"Player 2: {player2_name} ({player2_participant})\n")
-    
-    player1_wins = 0
-    player2_wins = 0
-    draws = 0
-    
-    total_games = NUM_ROUNDS * 2
-    for round_num in range(NUM_ROUNDS):
-        print(f"\n{Colors.CYAN}{Colors.BOLD}{'=' * 60}")
-        print(f"          GAME {round_num * 2 + 1} of {total_games}")
-        print(f"{'=' * 60}{Colors.RESET}\n")
+    p1W = 0
+    p2W = 0
+    tot = 2
+    for i in range(tot):
+        print(f"{i}, Judge engine starting up, waiting for agents...")
+        time.sleep(5)
+        url1 = "http://localhost:5008"
+        url2 = "http://localhost:5009"
+        # Get agent URLs from environment variables
+        PLAYER1_URL = os.getenv("PLAYER1_URL", url1 if i % 2 == 0 else url2)
+        PLAYER2_URL = os.getenv("PLAYER2_URL", url2 if i % 2 == 0 else url1)
+        # PLAYER2_URL = os.getenv("PLAYER2_URL", "https://fat-precision-columns-clear.trycloudflare.com/")
+
+        # Creating judge
+        print(f"Creating judge for {PLAYER1_URL} and {PLAYER2_URL}...")
+        judge = Judge(PLAYER1_URL, PLAYER2_URL)
+
+        # Check connectivity and latency
+        if not judge.check_latency():
+            print("Failed to connect to one or both players")
+            return
+            
+        print(f"Player 1: {judge.p1_agent.agent_name} ({judge.p1_agent.participant})")
+        print(f"Player 2: {judge.p2_agent.agent_name} ({judge.p2_agent.participant})")
+        print(f"Initial latencies - P1: {judge.p1_agent.latency:.3f}s, P2: {judge.p2_agent.latency:.3f}s")
         
-        judge1 = Judge(PLAYER1_URL, PLAYER2_URL)
-        judge1.connect_to_bots()
-        print(f"Player 1 ({player1_name}) = RED, Player 2 ({player2_name}) = BLUE")
-        
-        result1 = run_game(judge1)
-        
-        if result1 == GameResult.AGENT1_WIN:
-            player1_wins += 1
-        elif result1 == GameResult.AGENT2_WIN:
-            player2_wins += 1
-        else:
-            draws += 1
-        
-        print(f"\n{Colors.CYAN}{Colors.BOLD}Score:{Colors.RESET}")
-        print(f"Player 1 ({player1_name}): {player1_wins} | Player 2 ({player2_name}): {player2_wins} | Draws: {draws}\n")
-        
-        time.sleep(2)
-        
-        print(f"\n{Colors.CYAN}{Colors.BOLD}{'=' * 60}")
-        print(f"          GAME {round_num * 2 + 2} of {total_games}")
-        print(f"{'=' * 60}{Colors.RESET}\n")
-        
-        judge2 = Judge(PLAYER2_URL, PLAYER1_URL)
-        judge2.connect_to_bots()
-        print(f"Player 1 ({player1_name}) = BLUE, Player 2 ({player2_name}) = RED")
-        
-        result2 = run_game(judge2)
-        
-        if result2 == GameResult.AGENT2_WIN:
-            player1_wins += 1
-        elif result2 == GameResult.AGENT1_WIN:
-            player2_wins += 1
-        else:
-            draws += 1
-        
-        print(f"\n{Colors.CYAN}{Colors.BOLD}Score:{Colors.RESET}")
-        print(f"Player 1 ({player1_name}): {player1_wins} | Player 2 ({player2_name}): {player2_wins} | Draws: {draws}\n")
-        
-        if round_num < NUM_ROUNDS - 1:
-            time.sleep(2)
-    
-    print(f"\n{Colors.BOLD}{Colors.CYAN}")
-    print("╔════════════════════════════════════════════════════════════╗")
-    print("║                    FINAL RESULTS                           ║")
-    print("╚════════════════════════════════════════════════════════════╝")
-    print(f"{Colors.RESET}\n")
-    
-    print(f"{Colors.BOLD}Total Games: {total_games}{Colors.RESET}")
-    print(f"Player 1 ({player1_name}): {player1_wins}")
-    print(f"Player 2 ({player2_name}): {player2_wins}")
-    print(f"Draws: {draws}\n")
-    
-    if player1_wins > player2_wins:
-        print(f"{Colors.GREEN}{Colors.BOLD}🎉 OVERALL WINNER: Player 1 ({player1_name}) 🎉{Colors.RESET}\n")
-    elif player2_wins > player1_wins:
-        print(f"{Colors.GREEN}{Colors.BOLD}🎉 OVERALL WINNER: Player 2 ({player2_name}) 🎉{Colors.RESET}\n")
-    else:
-        print(f"{Colors.YELLOW}{Colors.BOLD}⚖️  TIE ⚖️{Colors.RESET}\n")
+        # Send initial state to both players
+        print("Sending initial game state...")
+        if not judge.send_state(1) or not judge.send_state(2):
+            print("Failed to send initial state")
+            return
+
+        # Random moves left for p1 and p2
+        p1_random = 5
+        p2_random = 5
+
+        # Game loop
+        while True:
+            print(f"\n=== Turn {judge.game.turns + 1} ===")
+            
+            # Get moves from both players
+            p1_move = None
+            p2_move = None
+            p1_boost = False
+            p2_boost = False
+            
+            # Player 1 move
+            print("Requesting move from Player 1...")
+            for attempt in range(1, 3):  # 2 attempts
+                p1_move = judge.get_move(1, attempt, p1_random)
+                if p1_move:
+                    validation = judge.handle_move(p1_move, 1, is_random=False)
+                    if validation == "forfeit":
+                        print("Player 1 forfeited")
+                        judge.end_game(GameResult.AGENT2_WIN)
+                        print("Game String:", judge.game_str)
+                        p2W +=1
+                        return
+                    elif validation:
+                        p1_boost = validation[1]  # Extract boost flag
+                        p1_direction = validation[2]  # Extract direction
+                        break
+                print(f"  Attempt {attempt} failed")
+            
+            # If both attempts failed, use random move or forfeit
+            if not p1_move or not validation:
+                if p1_random > 0:
+                    print(f"Using random move for Player 1 ({p1_random} random moves left)")
+                    random_agent = RandomPlayer(1)
+                    p1_direction = random_agent.get_best_move()
+                    p1_random -= 1
+                    # Convert Direction to string for handle_move
+                    dir_to_str = {Direction.UP: 'UP', Direction.DOWN: 'DOWN', Direction.LEFT: 'LEFT', Direction.RIGHT: 'RIGHT'}
+                    validation = judge.handle_move(dir_to_str[p1_direction], 1, is_random=True)
+                    p1_boost = False  # Random moves don't use boost
+                else:
+                    print("Player 1 has no random moves left. Forfeiting.")
+                    judge.end_game(GameResult.AGENT2_WIN)
+                    print("Game String:", judge.game_str)
+                    p2W +=1
+                    return
+            else:
+                # Direction already extracted from validation
+                pass
+            
+            # Player 2 move
+            print("Requesting move from Player 2...")
+            for attempt in range(1, 3):  # 2 attempts
+                p2_move = judge.get_move(2, attempt, p2_random)
+                if p2_move:
+                    validation = judge.handle_move(p2_move, 2, is_random=False)
+                    if validation == "forfeit":
+                        print("Player 2 forfeited")
+                        judge.end_game(GameResult.AGENT1_WIN)
+                        print("Game String:", judge.game_str)
+                        p1W += 1
+                        return
+                    elif validation:
+                        p2_boost = validation[1]  # Extract boost flag
+                        p2_direction = validation[2]  # Extract direction
+                        break
+                print(f"  Attempt {attempt} failed")
+            
+            # If both attempts failed, use random move or forfeit
+            if not p2_move or not validation:
+                if p2_random > 0:
+                    print(f"Using random move for Player 2 ({p2_random} random moves left)")
+                    random_agent = RandomPlayer(2)
+                    p2_direction = random_agent.get_best_move()
+                    p2_random -= 1
+                    # Convert Direction to string for handle_move
+                    dir_to_str = {Direction.UP: 'UP', Direction.DOWN: 'DOWN', Direction.LEFT: 'LEFT', Direction.RIGHT: 'RIGHT'}
+                    validation = judge.handle_move(dir_to_str[p2_direction], 2, is_random=True)
+                    p2_boost = False  # Random moves don't use boost
+                else:
+                    print("Player 2 has no random moves left. Forfeiting.")
+                    judge.end_game(GameResult.AGENT1_WIN)
+                    print("Game String:", judge.game_str)
+                    p1W += 1
+                    return
+            else:
+                # Direction already extracted from validation
+                pass
+            
+            # Execute both moves simultaneously
+            result = judge.game.step(p1_direction, p2_direction, p1_boost, p2_boost)
+            
+            # Send updated state to both players
+            judge.send_state(1)
+            judge.send_state(2)
+            
+            # Display current board state
+            print(judge.game)
+            print(f"Agent 1: Trail Length={judge.game.agent1.length}, Alive={judge.game.agent1.alive}, Boosts={judge.game.agent1.boosts_remaining}")
+            print(f"Agent 2: Trail Length={judge.game.agent2.length}, Alive={judge.game.agent2.alive}, Boosts={judge.game.agent2.boosts_remaining}")
+            
+            # Check for game end
+            if result is not None:
+                judge.end_game(result)
+                if result == GameResult.AGENT1_WIN:
+                    p1W += 1
+                elif result == GameResult.AGENT2_WIN:
+                    p2W +=1
+                print("Game String:", judge.game_str)
+                break
+            
+            # Check for max turns (safety)
+            if judge.game.turns >= 500:
+                print("Maximum turns reached")
+                judge.end_game(GameResult.DRAW)
+                print("Game String:", judge.game_str)
+                break
+    print(f"P1 ({judge.p1_agent.agent_name}) Wins: {p1W}")
+    print(f"P2 ({judge.p2_agent.agent_name}) Wins: {p2W}")
+    print(f"Ties: {tot - p1W - p2W}")
+    print(f"total: {tot}")
+
 
 if __name__ == "__main__":
     main()

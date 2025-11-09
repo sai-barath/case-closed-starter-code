@@ -85,7 +85,7 @@ func sendMoveHandler(w http.ResponseWriter, r *http.Request) {
 		otherTrail = globalGameState.Agent1Trail
 	}
 	
-	move := DecideMove(myTrail, otherTrail, globalGameState.TurnCount, myBoosts)
+	move := DecideMove(myTrail, otherTrail, globalGameState.TurnCount, myBoosts, playerNumber)
 	
 	response := map[string]string{"move": move}
 	w.Header().Set("Content-Type", "application/json")
