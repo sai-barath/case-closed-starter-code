@@ -123,7 +123,7 @@ func main() {
 	http.HandleFunc("/send-move", sendMoveHandler)
 	http.HandleFunc("/end", endGameHandler)
 
-	port := getEnv("PORT", "5008")
+	port := getEnv("PORT", "8080")
 
 	agentName := getEnv("AGENT_NAME", "SteamrollerAgent")
 	participant := getEnv("PARTICIPANT", "SteamrollerParticipant")
