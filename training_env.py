@@ -84,7 +84,7 @@ class TrainingEnvironment:
             'my_trail': list(self.game.agent1.trail) if player_number == 1 else list(self.game.agent2.trail),
             'opponent_trail': list(self.game.agent2.trail) if player_number == 1 else list(self.game.agent1.trail),
             'my_boosts': self.game.agent1.boosts_remaining if player_number == 1 else self.game.agent2.boosts_remaining,
-            'my_direction': self.game.agent1.direction if player_number == 1 else self.game.agent2.direction,
+            'my_direction': (self.game.agent1.direction.value if player_number == 1 else self.game.agent2.direction.value),
             'board_height': self.game.board.height,
             'board_width': self.game.board.width,
         }

@@ -24,6 +24,7 @@ import copy
 import os
 import json
 from datetime import datetime
+import time
 
 from training_env import TrainingEnvironment, run_episode, evaluate_agents
 from case_closed_game import GameResult
@@ -170,9 +171,10 @@ class DQNAgent:
                  epsilon_start: float = 1.0,
                  epsilon_end: float = 0.01,
                  epsilon_decay: float = 0.995,
-                 buffer_capacity: int = 100000,
-                 batch_size: int = 64,
-                 target_update_freq: int = 1000):
+                 buffer_capacity: int = 50000,  # Reduced from 100k for faster training
+                 batch_size: int = 128,  # Increased from 64 for more stable updates
+                 target_update_freq: int = 1000,
+                 save_dir: Optional[str] = None):
         """
         Initialize DQN agent.
         
@@ -182,9 +184,10 @@ class DQNAgent:
             epsilon_start: Initial exploration rate
             epsilon_end: Minimum exploration rate
             epsilon_decay: Decay rate for epsilon
-            buffer_capacity: Size of replay buffer
-            batch_size: Batch size for training
+            buffer_capacity: Size of replay buffer (50k for speed)
+            batch_size: Batch size for training (128 for stability)
             target_update_freq: Steps between target network updates
+            save_dir: Directory to save models (timestamped if None)
         """
         self.gamma = gamma
         self.epsilon = epsilon_start
@@ -192,6 +195,16 @@ class DQNAgent:
         self.epsilon_decay = epsilon_decay
         self.batch_size = batch_size
         self.target_update_freq = target_update_freq
+        
+        # Create timestamped model directory
+        if save_dir is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            save_dir = f"models_{timestamp}"
+        self.save_dir = save_dir
+        os.makedirs(self.save_dir, exist_ok=True)
+        print(f"\n{'='*60}")
+        print(f"Models will be saved to: {self.save_dir}")
+        print(f"{'='*60}\n")
         
         # Action mapping
         self.actions = ['UP', 'DOWN', 'LEFT', 'RIGHT']
@@ -512,26 +525,73 @@ class DQNAgent:
         print(f"  Episodes: {self.episodes}, Steps: {self.steps}, Epsilon: {self.epsilon:.4f}")
 
 
+def visualize_board(state: Dict, last_action: str = None, result: str = None):
+    """
+    Print a visual representation of the game board.
+    
+    Args:
+        state: Game state dictionary
+        last_action: Last action taken (optional)
+        result: Game result string (optional)
+    """
+    board = state['board']
+    height = state['board_height']
+    width = state['board_width']
+    my_pos = state['my_position']
+    opp_pos = state['opponent_position']
+    
+    print(f"\n{'='*60}")
+    if result:
+        print(f"GAME RESULT: {result}")
+    if last_action:
+        print(f"Last Action: {last_action}")
+    print(f"Turn: {state['turn_count']} | My Boosts: {state['my_boosts']} | Player: {state['player_number']}")
+    print(f"{'='*60}")
+    
+    # Create visual board
+    visual = []
+    for y in range(height):
+        row = []
+        for x in range(width):
+            if (x, y) == my_pos:
+                row.append('🔵')  # My position
+            elif (x, y) == opp_pos:
+                row.append('🔴')  # Opponent position
+            elif board[y][x] == 1:
+                row.append('██')  # Wall/trail
+            else:
+                row.append('  ')  # Empty
+        visual.append(''.join(row))
+    
+    # Print with border
+    print('┌' + '─' * (width * 2) + '┐')
+    for row in visual:
+        print('│' + row + '│')
+    print('└' + '─' * (width * 2) + '┘')
+    print()
+
+
 def train_dqn_agent(num_episodes: int = 10000,
-                    save_freq: int = 500,
-                    eval_freq: int = 100,
-                    save_dir: str = "models",
+                    save_freq: int = 50,  # Save every 50 episodes (was 500)
+                    eval_freq: int = 200,  # Evaluate every 200 episodes (was 100)
+                    save_dir: Optional[str] = None,
                     resume_from: Optional[str] = None):
     """
     Train DQN agent through self-play.
     
     Args:
         num_episodes: Number of training episodes
-        save_freq: Episodes between model saves
-        eval_freq: Episodes between evaluations
-        save_dir: Directory to save models
+        save_freq: Episodes between model saves (default 50)
+        eval_freq: Episodes between evaluations (default 200)
+        save_dir: Directory to save models (timestamped if None)
         resume_from: Optional path to resume training from
     """
-    # Create save directory
-    os.makedirs(save_dir, exist_ok=True)
+    # Initialize agent (will create timestamped directory)
+    agent = DQNAgent(save_dir=save_dir)
     
-    # Initialize agent
-    agent = DQNAgent()
+    # Save initial model immediately
+    initial_path = os.path.join(agent.save_dir, "dqn_agent_ep0_initial.pt")
+    agent.save_model(initial_path, metadata={'episode': 0, 'note': 'Initial model'})
     
     # Resume training if specified
     if resume_from and os.path.exists(resume_from):
@@ -546,7 +606,11 @@ def train_dqn_agent(num_episodes: int = 10000,
     # Training loop
     print(f"\n{'='*70}")
     print(f"Starting DQN Training on {DEVICE}")
+    print(f"Save Frequency: Every {save_freq} episodes")
+    print(f"Eval Frequency: Every {eval_freq} episodes")
     print(f"{'='*70}\n")
+    
+    start_time = time.time()
     
     for episode in range(agent.episodes, agent.episodes + num_episodes):
         env = TrainingEnvironment()
@@ -579,10 +643,11 @@ def train_dqn_agent(num_episodes: int = 10000,
             # Also store experience for Agent 2 (learning from both perspectives)
             agent.replay_buffer.push(state2, action2, reward2, next_state2, done)
             
-            # Train
-            loss = agent.train_step()
-            if loss is not None:
-                agent.losses.append(loss)
+            # Train (only if buffer is large enough)
+            if len(agent.replay_buffer) >= agent.batch_size:
+                loss = agent.train_step()
+                if loss is not None:
+                    agent.losses.append(loss)
             
             # Update state
             state1 = next_state1
@@ -603,20 +668,30 @@ def train_dqn_agent(num_episodes: int = 10000,
         
         agent.episodes += 1
         
-        # Print progress
+        # Visualize board every 50 episodes (was 25 - reduce overhead)
+        if (episode + 1) % 50 == 0 and (episode + 1) <= 200:  # Only first 200 episodes
+            result_str = str(result).replace('GameResult.', '')
+            visualize_board(state1, action1, result_str)
+        
+        # Print progress every 10 episodes with timing info
         if (episode + 1) % 10 == 0:
             avg_reward = np.mean(episode_rewards[-10:])
             avg_length = np.mean(episode_lengths[-10:])
             win_rate = np.mean(win_history) if win_history else 0.5
             avg_loss = np.mean(agent.losses[-100:]) if agent.losses else 0
             
-            print(f"Episode {episode + 1:5d} | "
-                  f"Reward: {avg_reward:7.2f} | "
-                  f"Length: {avg_length:5.1f} | "
-                  f"Win Rate: {win_rate:.2%} | "
-                  f"Loss: {avg_loss:7.4f} | "
-                  f"Epsilon: {agent.epsilon:.4f} | "
-                  f"Buffer: {len(agent.replay_buffer)}")
+            # Calculate episodes per minute
+            elapsed = time.time() - start_time
+            eps_per_min = (episode + 1 - agent.episodes + num_episodes) / elapsed * 60 if elapsed > 0 else 0
+            
+            print(f"Ep {episode + 1:4d} | "
+                  f"Reward: {avg_reward:6.1f} | "
+                  f"Length: {avg_length:4.1f} | "
+                  f"WinRate: {win_rate:.2%} | "
+                  f"Loss: {avg_loss:6.4f} | "
+                  f"ε: {agent.epsilon:.4f} | "
+                  f"Buf: {len(agent.replay_buffer):5d} | "
+                  f"{eps_per_min:.0f} ep/min")
         
         # Evaluation against baseline agents
         if (episode + 1) % eval_freq == 0:
@@ -644,32 +719,46 @@ def train_dqn_agent(num_episodes: int = 10000,
         # Save model
         if (episode + 1) % save_freq == 0:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            save_path = os.path.join(save_dir, f"dqn_agent_ep{episode + 1}_{timestamp}.pt")
+            save_path = os.path.join(agent.save_dir, f"dqn_agent_ep{episode + 1}_{timestamp}.pt")
             
             metadata = {
                 'episode': episode + 1,
-                'avg_reward_last_100': np.mean(episode_rewards[-100:]),
-                'avg_length_last_100': np.mean(episode_lengths[-100:]),
+                'avg_reward_last_100': np.mean(episode_rewards[-100:]) if len(episode_rewards) >= 100 else np.mean(episode_rewards),
+                'avg_length_last_100': np.mean(episode_lengths[-100:]) if len(episode_lengths) >= 100 else np.mean(episode_lengths),
                 'win_rate_last_100': np.mean(win_history),
                 'epsilon': agent.epsilon,
                 'timestamp': timestamp
             }
             
             agent.save_model(save_path, metadata)
+            print(f"✓ Checkpoint saved: {save_path}")
     
     # Final save
-    final_path = os.path.join(save_dir, "dqn_agent_final.pt")
-    agent.save_model(final_path, metadata={
+    final_path = os.path.join(agent.save_dir, "dqn_agent_final.pt")
+    final_metadata = {
         'total_episodes': agent.episodes,
         'final_epsilon': agent.epsilon,
-        'training_complete': True
-    })
+        'training_complete': True,
+        'final_win_rate': np.mean(win_history) if win_history else 0.5,
+        'total_training_time': time.time() - start_time
+    }
+    agent.save_model(final_path, metadata=final_metadata)
+    
+    # Training summary
+    total_time = time.time() - start_time
+    eps_per_min = num_episodes / (total_time / 60)
     
     print(f"\n{'='*70}")
     print(f"Training Complete!")
     print(f"{'='*70}")
-    print(f"Total Episodes: {agent.episodes}")
-    print(f"Final Model: {final_path}")
+    print(f"Total Episodes:     {agent.episodes}")
+    print(f"Total Time:         {total_time/60:.2f} minutes")
+    print(f"Episodes/Minute:    {eps_per_min:.1f}")
+    print(f"Final Win Rate:     {np.mean(win_history):.2%}" if win_history else "N/A")
+    print(f"Final Epsilon:      {agent.epsilon:.4f}")
+    print(f"Replay Buffer Size: {len(agent.replay_buffer)}")
+    print(f"Final Model:        {final_path}")
+    print(f"Model Directory:    {agent.save_dir}")
     print(f"{'='*70}\n")
 
 
