@@ -74,6 +74,12 @@ func DecideMove(myTrail, otherTrail [][]int, turnCount, myBoosts, playerNumber i
 
 	bestMove := iterativeDeepeningSearch(snapshot, &ctx)
 
+	if debugMode {
+		myVoronoi, oppVoronoi, control := calculateVoronoiControl(snapshot.myAgent, snapshot.otherAgent)
+		logDebug("Voronoi control - Me: %d, Opp: %d, Neutral: %d", myVoronoi, oppVoronoi, BOARD_HEIGHT*BOARD_WIDTH-myVoronoi-oppVoronoi)
+		printVoronoiMap(snapshot.myAgent, snapshot.otherAgent, control, bestMove)
+	}
+
 	elapsed := time.Since(ctx.startTime)
 
 	moveStr := directionToString(bestMove.direction)
@@ -361,16 +367,42 @@ func shouldUseBoost(snapshot GameStateSnapshot, dir Direction) bool {
 }
 
 func calculateVoronoiTerritory(myAgent *Agent, otherAgent *Agent) (int, int) {
+	myCount, oppCount, _ := calculateVoronoiControl(myAgent, otherAgent)
+	return myCount, oppCount
+}
+
+func calculateVoronoiControl(myAgent *Agent, otherAgent *Agent) (int, int, [][]int) {
 	if !myAgent.Alive {
-		return 0, BOARD_HEIGHT * BOARD_WIDTH
+		control := make([][]int, BOARD_HEIGHT)
+		for y := 0; y < BOARD_HEIGHT; y++ {
+			row := make([]int, BOARD_WIDTH)
+			for x := 0; x < BOARD_WIDTH; x++ {
+				row[x] = 2
+			}
+			control[y] = row
+		}
+		return 0, BOARD_HEIGHT * BOARD_WIDTH, control
 	}
 	if !otherAgent.Alive {
-		return BOARD_HEIGHT * BOARD_WIDTH, 0
+		control := make([][]int, BOARD_HEIGHT)
+		for y := 0; y < BOARD_HEIGHT; y++ {
+			row := make([]int, BOARD_WIDTH)
+			for x := 0; x < BOARD_WIDTH; x++ {
+				row[x] = 1
+			}
+			control[y] = row
+		}
+		return BOARD_HEIGHT * BOARD_WIDTH, 0, control
 	}
 
 	type QueueItem struct {
 		pos   Position
 		owner int
+	}
+
+	control := make([][]int, BOARD_HEIGHT)
+	for y := 0; y < BOARD_HEIGHT; y++ {
+		control[y] = make([]int, BOARD_WIDTH)
 	}
 
 	visited := make(map[Position]int)
@@ -409,15 +441,76 @@ func calculateVoronoiTerritory(myAgent *Agent, otherAgent *Agent) (int, int) {
 	myTerritory := 0
 	oppTerritory := 0
 
-	for _, owner := range visited {
+	for pos, owner := range visited {
 		if owner == 1 {
 			myTerritory++
+			control[pos.Y][pos.X] = 1
 		} else if owner == 2 {
 			oppTerritory++
+			control[pos.Y][pos.X] = 2
 		}
 	}
 
-	return myTerritory, oppTerritory
+	for y := 0; y < BOARD_HEIGHT; y++ {
+		for x := 0; x < BOARD_WIDTH; x++ {
+			p := Position{X: x, Y: y}
+			if myAgent.Board.GetCellState(p) != EMPTY {
+				control[y][x] = -1
+			} else if control[y][x] == 0 {
+				control[y][x] = 0
+			}
+		}
+	}
+
+	return myTerritory, oppTerritory, control
+}
+
+func printVoronoiMap(myAgent *Agent, otherAgent *Agent, control [][]int, bestMove Move) {
+	if !debugMode {
+		return
+	}
+
+	fmt.Println("Voronoi map (.: empty, #: wall, M: me, O: opp, m: mine, o: opp, =: neutral)")
+	fmt.Printf("Best move: %s (boost=%v, score=%d)\n", directionToString(bestMove.direction), bestMove.useBoost, bestMove.score)
+
+	for y := 0; y < BOARD_HEIGHT; y++ {
+		for x := 0; x < BOARD_WIDTH; x++ {
+			p := Position{X: x, Y: y}
+			cell := myAgent.Board.GetCellState(p)
+
+			if myAgent.IsHead(p) {
+				fmt.Print("M")
+			} else if otherAgent.IsHead(p) {
+				fmt.Print("O")
+			} else if cell == AGENT {
+				fmt.Print("#")
+			} else {
+				owner := control[y][x]
+				if owner == 1 {
+					fmt.Print("m")
+				} else if owner == 2 {
+					fmt.Print("o")
+				} else {
+					fmt.Print("=")
+				}
+			}
+		}
+		fmt.Println()
+	}
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 func buildGameSnapshot(myTrail, otherTrail [][]int, myBoosts, playerNumber int) GameStateSnapshot {
@@ -522,18 +615,4 @@ func directionToString(dir Direction) string {
 	default:
 		return "RIGHT"
 	}
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func abs(x int) int {
-	if x < 0 {
-		return -x
-	}
-	return x
 }
