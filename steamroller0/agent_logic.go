@@ -11,9 +11,9 @@ import (
 var debugMode = os.Getenv("DEBUG") == "1"
 
 const (
-	SEARCH_TIME_LIMIT         = 1000 * time.Millisecond
-	WIN_SCORE                 = 10000
-	LOSE_SCORE                = -10000
+	SEARCH_TIME_LIMIT         = 3500 * time.Millisecond
+	WIN_SCORE                 = 10000000
+	LOSE_SCORE                = -10000000
 	DRAW_SCORE                = 0
 	BOARD_HEIGHT              = 18
 	BOARD_WIDTH               = 20
@@ -67,33 +67,34 @@ var (
 	MID_GAME_BALANCE            = 1.0
 	LATE_GAME_TERRITORY         = 1.5
 	ENDGAME_SURVIVAL            = 3.0
-	WEIGHT_TERRITORY            = 200
-	WEIGHT_FREEDOM              = 171
-	WEIGHT_REACHABLE            = 193
-	WEIGHT_BOOST                = 14
-	WEIGHT_CHAMBER              = 62
+	WEIGHT_TERRITORY            = 153
+	WEIGHT_FREEDOM              = 8
+	WEIGHT_REACHABLE            = 165
+	WEIGHT_BOOST                = 11
+	WEIGHT_CHAMBER              = 48
 	WEIGHT_EDGE                 = -12
-	WEIGHT_COMPACTNESS          = -30
-	WEIGHT_CUTOFF               = 59
-	WEIGHT_GROWTH               = 59
-	PENALTY_CORRIDOR_BASE       = 181
-	PENALTY_HEAD_DISTANCE       = 135
-	WEIGHT_VORONOI_SECOND_ORDER = 133
-	WEIGHT_POTENTIAL_MOBILITY   = 18
-	WEIGHT_TRAIL_THREAT         = 8
-	WEIGHT_INFLUENCE            = 75
-	WEIGHT_WALL_PENALTY         = 80
-	WEIGHT_TERRITORY_DENSITY    = 99
-	WEIGHT_ESCAPE_ROUTES        = 225
-	WEIGHT_OPPONENT_MOBILITY    = 41
-	WEIGHT_LOOKAHEAD_CONTROL    = 79
-	WEIGHT_SPACE_EFFICIENCY     = 22
-	WEIGHT_AGGRESSIVE_CUTOFF    = 30
-	WEIGHT_DEFENSIVE_SPACING    = 15
-	WEIGHT_CENTER_CONTROL       = 52
-	WEIGHT_FUTURE_TERRITORY     = 80
-	WEIGHT_MOBILITY_PROJECTION  = 75
-	WEIGHT_CHOKE_POINT          = 98
+	WEIGHT_COMPACTNESS          = 18
+	WEIGHT_CUTOFF               = 12
+	WEIGHT_GROWTH               = 93
+	PENALTY_CORRIDOR_BASE       = 452
+	PENALTY_HEAD_DISTANCE       = 179
+	WEIGHT_VORONOI_SECOND_ORDER = 115
+	WEIGHT_POTENTIAL_MOBILITY   = 120
+	WEIGHT_TRAIL_THREAT         = 9
+	WEIGHT_INFLUENCE            = 24
+	WEIGHT_WALL_PENALTY         = 208
+	WEIGHT_TERRITORY_DENSITY    = 84
+	WEIGHT_ESCAPE_ROUTES        = 111
+	WEIGHT_OPPONENT_MOBILITY    = 17
+	WEIGHT_LOOKAHEAD_CONTROL    = 29
+	WEIGHT_SPACE_EFFICIENCY     = 15
+	WEIGHT_AGGRESSIVE_CUTOFF    = 123
+	WEIGHT_DEFENSIVE_SPACING    = 109
+	WEIGHT_CENTER_CONTROL       = 67
+	WEIGHT_FUTURE_TERRITORY     = 3
+	WEIGHT_MOBILITY_PROJECTION  = 36
+	WEIGHT_CHOKE_POINT          = 30
+
 )
 
 func logDebug(format string, args ...interface{}) {
@@ -174,14 +175,27 @@ func (km *KillerMoves) isKiller(depth int, move Direction) bool {
 }
 
 func (ht *HistoryTable) add(dir Direction, depth int, pos Position) {
-	if int(dir) < 4 && pos.X < BOARD_WIDTH && pos.Y < BOARD_HEIGHT && pos.X >= 0 && pos.Y >= 0 {
-		ht.scores[dir][pos.Y][pos.X] += depth * depth
+	if directionToInt(dir) < 4 && pos.X < BOARD_WIDTH && pos.Y < BOARD_HEIGHT && pos.X >= 0 && pos.Y >= 0 {
+		ht.scores[directionToInt(dir)][pos.Y][pos.X] += depth * depth
 	}
 }
 
 func (ht *HistoryTable) get(dir Direction, pos Position) int {
-	if int(dir) < 4 && pos.X < BOARD_WIDTH && pos.Y < BOARD_HEIGHT && pos.X >= 0 && pos.Y >= 0 {
-		return ht.scores[dir][pos.Y][pos.X]
+	if directionToInt(dir) < 4 && pos.X < BOARD_WIDTH && pos.Y < BOARD_HEIGHT && pos.X >= 0 && pos.Y >= 0 {
+		return ht.scores[directionToInt(dir)][pos.Y][pos.X]
+	}
+	return 0
+}
+
+func directionToInt(dir Direction) int {
+	if dir == UP {
+		return 0
+	} else if dir == DOWN {
+		return 1
+	} else if dir == LEFT {
+		return 2
+	} else if dir == RIGHT {
+		return 3
 	}
 	return 0
 }
@@ -280,8 +294,6 @@ func iterativeDeepeningSearch(snapshot GameStateSnapshot, ctx *SearchContext) Mo
 		}
 
 		var depthBestMove Move
-		failedHigh := false
-		failedLow := false
 
 		for {
 			depthBestMove = searchAtDepth(snapshot, depth, alpha, beta, ctx)
@@ -292,12 +304,12 @@ func iterativeDeepeningSearch(snapshot GameStateSnapshot, ctx *SearchContext) Mo
 			}
 
 			if depthBestMove.score <= alpha {
-				failedLow = true
+				
 				alpha = depthBestMove.score - window
 				window *= 2
 				logDebug("Aspiration window fail-low, widening to [%d, %d]", alpha, beta)
 			} else if depthBestMove.score >= beta {
-				failedHigh = true
+				
 				beta = depthBestMove.score + window
 				window *= 2
 				logDebug("Aspiration window fail-high, widening to [%d, %d]", alpha, beta)
@@ -339,7 +351,7 @@ func searchAtDepth(snapshot GameStateSnapshot, maxDepth int, alpha int, beta int
 	}
 
 	zobrist := computeZobrist(snapshot.myAgent, snapshot.otherAgent)
-	ttMove := Direction(-1)
+	ttMove := UP
 	if entry, ok := ctx.tt[zobrist]; ok && entry.depth >= maxDepth {
 		ttMove = entry.bestMove
 	}
@@ -560,7 +572,7 @@ func alphabeta(myAgent *Agent, otherAgent *Agent, depth int, alpha int, beta int
 
 	if isMaximizing {
 		maxScore := math.MinInt32
-		bestMove := Direction(-1)
+		bestMove := UP
 
 		validMoves := myAgent.GetValidMoves()
 		if len(validMoves) == 0 {
@@ -1673,7 +1685,7 @@ func getDynamicWeights(turnCount int, searchDepth int) WeightSet {
 		depthMultiplierStrategic = 1.3
 	}
 
-	boostThreshold := int(float64(20) * (float64(WEIGHT_TERRITORY) / 200.0))
+	_ = int(float64(20) * (float64(WEIGHT_TERRITORY) / 200.0))
 
 	if turnCount < 50 {
 		weights.territory = int(float64(WEIGHT_TERRITORY/2) * depthMultiplierStrategic)

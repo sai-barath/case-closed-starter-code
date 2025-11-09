@@ -215,8 +215,9 @@ def main():
     url1_wins = 0
     url2_wins = 0
     tot = 20
-    url1 = "http://localhost:5008"
-    url2 = "http://localhost:5009"
+    # url1 = "http://localhost:5008"
+    url1 = "https://realize-monitored-possible-removing.trycloudflare.com/"
+    url2 = "http://localhost:5008"
     for i in range(tot):
         print(f"{i}, Judge engine starting up, waiting for agents...")
         time.sleep(5)
