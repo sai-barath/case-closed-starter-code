@@ -75,9 +75,8 @@ func DecideMove(myTrail, otherTrail [][]int, turnCount, myBoosts, playerNumber i
 	bestMove := iterativeDeepeningSearch(snapshot, &ctx)
 
 	if debugMode {
-		myVoronoi, oppVoronoi, control := calculateVoronoiControl(snapshot.myAgent, snapshot.otherAgent)
+		myVoronoi, oppVoronoi, _ := calculateVoronoiControl(snapshot.myAgent, snapshot.otherAgent)
 		logDebug("Voronoi control - Me: %d, Opp: %d, Neutral: %d", myVoronoi, oppVoronoi, BOARD_HEIGHT*BOARD_WIDTH-myVoronoi-oppVoronoi)
-		printVoronoiMap(snapshot.myAgent, snapshot.otherAgent, control, bestMove)
 	}
 
 	elapsed := time.Since(ctx.startTime)
@@ -149,7 +148,8 @@ func searchAtDepth(snapshot GameStateSnapshot, maxDepth int, ctx *SearchContext)
 				continue
 			}
 
-			if useBoost && !shouldUseBoost(snapshot, dir) {
+			// Safety check + tactical check
+			if useBoost && (!isBoostSafe(snapshot, dir) || !shouldUseBoost(snapshot, dir)) {
 				continue
 			}
 
@@ -187,31 +187,46 @@ func evaluateMoveAtDepth(snapshot GameStateSnapshot, dir Direction, useBoost boo
 			return bestScore
 		}
 
-		var score int
-		if snapshot.amIRed {
-			_, myState := snapshot.myAgent.UndoableMove(dir, snapshot.otherAgent, useBoost)
-			_, oppState := snapshot.otherAgent.UndoableMove(oppDir, snapshot.myAgent, false)
-			score = alphabeta(snapshot.myAgent, snapshot.otherAgent, maxDepth-1, alpha, beta, true, ctx)
-			snapshot.otherAgent.UndoMove(oppState, snapshot.myAgent)
-			snapshot.myAgent.UndoMove(myState, snapshot.otherAgent)
-		} else {
-			_, oppState := snapshot.otherAgent.UndoableMove(oppDir, snapshot.myAgent, false)
-			_, myState := snapshot.myAgent.UndoableMove(dir, snapshot.otherAgent, useBoost)
-			score = alphabeta(snapshot.myAgent, snapshot.otherAgent, maxDepth-1, alpha, beta, true, ctx)
-			snapshot.myAgent.UndoMove(myState, snapshot.otherAgent)
-			snapshot.otherAgent.UndoMove(oppState, snapshot.myAgent)
-		}
+		// Consider opponent boost options
+		for _, oppUseBoost := range []bool{false, true} {
+			if oppUseBoost && snapshot.otherAgent.BoostsRemaining <= 0 {
+				continue
+			}
 
-		if score > bestScore {
-			bestScore = score
-		}
+			if ctx.timeExpired() {
+				return bestScore
+			}
 
-		if bestScore > alpha {
-			alpha = bestScore
-		}
+			var score int
+			if snapshot.amIRed {
+				// P1 moves first in reality, so opponent sees my move and reacts
+				// Simulate my move first, then opponent's reaction
+				_, myState := snapshot.myAgent.UndoableMove(dir, snapshot.otherAgent, useBoost)
+				_, oppState := snapshot.otherAgent.UndoableMove(oppDir, snapshot.myAgent, oppUseBoost)
+				score = alphabeta(snapshot.myAgent, snapshot.otherAgent, maxDepth-1, alpha, beta, true, ctx)
+				snapshot.otherAgent.UndoMove(oppState, snapshot.myAgent)
+				snapshot.myAgent.UndoMove(myState, snapshot.otherAgent)
+			} else {
+				// P2 sees P1's move and can react to it
+				// Simulate opponent's move first, then my reaction
+				_, oppState := snapshot.otherAgent.UndoableMove(oppDir, snapshot.myAgent, oppUseBoost)
+				_, myState := snapshot.myAgent.UndoableMove(dir, snapshot.otherAgent, useBoost)
+				score = alphabeta(snapshot.myAgent, snapshot.otherAgent, maxDepth-1, alpha, beta, true, ctx)
+				snapshot.myAgent.UndoMove(myState, snapshot.otherAgent)
+				snapshot.otherAgent.UndoMove(oppState, snapshot.myAgent)
+			}
 
-		if alpha >= beta {
-			break
+			if score > bestScore {
+				bestScore = score
+			}
+
+			if bestScore > alpha {
+				alpha = bestScore
+			}
+
+			if alpha >= beta {
+				break
+			}
 		}
 	}
 
@@ -317,7 +332,7 @@ func evaluatePosition(myAgent *Agent, otherAgent *Agent) int {
 		myComponentSize := cc.GetComponentSize(myComponentID)
 		oppComponentSize := cc.GetComponentSize(oppComponentID)
 
-		endgameScore := 1000 * (myComponentSize - oppComponentSize)
+		endgameScore := 10 * (myComponentSize - oppComponentSize)
 
 		logDebug("ENDGAME MODE: Players separated! My component: %d, Opp component: %d, Score: %d",
 			myComponentSize, oppComponentSize, endgameScore)
@@ -327,37 +342,108 @@ func evaluatePosition(myAgent *Agent, otherAgent *Agent) int {
 
 	score := 0
 
+	// Core metrics (same as steamroller03)
 	myTerritory, oppTerritory, control := calculateVoronoiControl(myAgent, otherAgent)
-
-	myEdgeBonus := calculateEdgeBonus(myAgent.Board, control, 1)
-	oppEdgeBonus := calculateEdgeBonus(otherAgent.Board, control, 2)
-
 	territoryDiff := myTerritory - oppTerritory
-	edgeDiff := myEdgeBonus - oppEdgeBonus
-
-	score += territoryDiff * 50
-	score += edgeDiff * 10
 
 	myFreedom := len(myValidMoves)
 	opponentFreedom := len(opponentValidMoves)
-	score += (myFreedom - opponentFreedom) * 150
 
 	myLocalSpace := countReachableSpace(myAgent, 15)
 	oppLocalSpace := countReachableSpace(otherAgent, 15)
-	score += (myLocalSpace - oppLocalSpace) * 100
 
 	boostDiff := myAgent.BoostsRemaining - otherAgent.BoostsRemaining
+
+	// Base scoring (similar to steamroller03, but keep territory at 50 to match their speed)
+	score += territoryDiff * 50 // REDUCED from 100 to match steamroller03
+	score += (myFreedom - opponentFreedom) * 150
+	score += (myLocalSpace - oppLocalSpace) * 100
 	score += boostDiff * 20
 
-	apf := NewArticulationPointFinder(myAgent.Board)
-	aps := apf.FindArticulationPoints()
+	// OUR STRATEGIC ADVANTAGES (kept but with lighter weights)
+	// Chamber tree detects articulation points - tactical advantage
+	ct := NewChamberTree(myAgent.Board)
+	chamberScore := ct.EvaluateChamberTree(myHead, oppHead)
+	score += chamberScore * 30 // INCREASED from 10 to make it more valuable than territory
 
-	mySpaceFillingScore := EvaluateSpaceFilling(myAgent.Board, myHead, aps)
-	oppSpaceFillingScore := EvaluateSpaceFilling(otherAgent.Board, oppHead, aps)
+	// Edge bonus - positions near walls are safer
+	myEdgeBonus := calculateEdgeBonus(myAgent.Board, control, 1)
+	oppEdgeBonus := calculateEdgeBonus(otherAgent.Board, control, 2)
+	edgeDiff := myEdgeBonus - oppEdgeBonus
+	score += edgeDiff * 15 // REDUCED from 20 to be less aggressive
 
-	score += (mySpaceFillingScore - oppSpaceFillingScore) / 10
+	// NEW: Space-filling efficiency - penalize leaving gaps in our territory
+	// Count the "compactness" of each agent's position
+	myCompactness := evaluateCompactness(myAgent, control, 1)
+	oppCompactness := evaluateCompactness(otherAgent, control, 2)
+	score += (myCompactness - oppCompactness) * 25
 
 	return score
+}
+
+// evaluateCompactness measures how efficiently an agent is filling its controlled territory
+// Higher scores = fewer gaps, more efficient space usage
+func evaluateCompactness(agent *Agent, control [][]int, playerID int) int {
+	if !agent.Alive {
+		return 0
+	}
+
+	head := agent.GetHead()
+	compactness := 0
+
+	// BFS from head to find nearby cells we control
+	visited := make(map[Position]bool)
+	queue := []Position{head}
+	visited[head] = true
+	depth := 0
+	maxDepth := 8 // Look ahead 8 cells
+
+	for len(queue) > 0 && depth < maxDepth {
+		levelSize := len(queue)
+		for i := 0; i < levelSize; i++ {
+			current := queue[0]
+			queue = queue[1:]
+
+			// Count neighbors in our controlled territory
+			controlledNeighbors := 0
+			emptyNeighbors := 0
+
+			for _, dir := range AllDirections {
+				next := Position{
+					X: current.X + dir.DX,
+					Y: current.Y + dir.DY,
+				}
+				next = agent.Board.TorusCheck(next)
+
+				state := agent.Board.GetCellState(next)
+
+				if state == EMPTY {
+					if control[next.Y][next.X] == playerID {
+						controlledNeighbors++
+						if !visited[next] {
+							visited[next] = true
+							queue = append(queue, next)
+						}
+					}
+					emptyNeighbors++
+				} else if agent.ContainsPosition(next) {
+					// Neighbor is our own trail
+					controlledNeighbors++
+				}
+			}
+
+			// Reward having many controlled neighbors (compact filling)
+			// Penalize having many empty neighbors we don't control (gaps)
+			if emptyNeighbors > 0 {
+				compactness += (controlledNeighbors * 10) / emptyNeighbors
+			} else {
+				compactness += controlledNeighbors * 10
+			}
+		}
+		depth++
+	}
+
+	return compactness
 }
 
 func countReachableSpace(agent *Agent, maxDepth int) int {
@@ -394,6 +480,7 @@ func countReachableSpace(agent *Agent, maxDepth int) int {
 }
 
 func shouldUseBoost(snapshot GameStateSnapshot, dir Direction) bool {
+	// Conservative baseline (from steamroller03)
 	myTerritory, oppTerritory := calculateVoronoiTerritory(snapshot.myAgent, snapshot.otherAgent)
 
 	if myTerritory > oppTerritory+20 {
@@ -407,7 +494,56 @@ func shouldUseBoost(snapshot GameStateSnapshot, dir Direction) bool {
 		return true
 	}
 
+	// OUR TACTICAL BOOST: Use boost to create chambers/traps
+	// Simulate boost move and check if it creates articulation point advantage
+	testBoard := snapshot.board.Clone()
+	testMyAgent := snapshot.myAgent.Clone(testBoard)
+	testOtherAgent := snapshot.otherAgent.Clone(testBoard)
+
+	// Try the boost move
+	success := testMyAgent.Move(dir, testOtherAgent, true)
+	if !success || !testMyAgent.Alive {
+		return false
+	}
+
+	// Check if boost creates a chamber advantage
+	ct := NewChamberTree(testMyAgent.Board)
+	myHead := testMyAgent.GetHead()
+	oppHead := testOtherAgent.GetHead()
+	chamberScore := ct.EvaluateChamberTree(myHead, oppHead)
+
+	// Use boost if it creates a significant chamber advantage (trap opponent)
+	if chamberScore > 3 {
+		return true
+	}
+
 	return false
+}
+
+func isBoostSafe(snapshot GameStateSnapshot, dir Direction) bool {
+	head := snapshot.myAgent.GetHead()
+
+	firstPos := Position{
+		X: head.X + dir.DX,
+		Y: head.Y + dir.DY,
+	}
+	firstPos = snapshot.myAgent.Board.TorusCheck(firstPos)
+
+	if snapshot.myAgent.Board.GetCellState(firstPos) != EMPTY {
+		return false
+	}
+
+	secondPos := Position{
+		X: firstPos.X + dir.DX,
+		Y: firstPos.Y + dir.DY,
+	}
+	secondPos = snapshot.myAgent.Board.TorusCheck(secondPos)
+
+	if snapshot.myAgent.Board.GetCellState(secondPos) != EMPTY {
+		return false
+	}
+
+	return true
 }
 
 func calculateVoronoiTerritory(myAgent *Agent, otherAgent *Agent) (int, int) {
@@ -444,9 +580,9 @@ func calculateVoronoiControl(myAgent *Agent, otherAgent *Agent) (int, int, [][]i
 		owner int
 	}
 
-	control := make([][]int, BOARD_HEIGHT)
-	for y := 0; y < BOARD_HEIGHT; y++ {
-		control[y] = make([]int, BOARD_WIDTH)
+	control := make([][]int, myAgent.Board.Height)
+	for y := 0; y < myAgent.Board.Height; y++ {
+		control[y] = make([]int, myAgent.Board.Width)
 	}
 
 	visited := make(map[Position]int)
@@ -495,8 +631,8 @@ func calculateVoronoiControl(myAgent *Agent, otherAgent *Agent) (int, int, [][]i
 		}
 	}
 
-	for y := 0; y < BOARD_HEIGHT; y++ {
-		for x := 0; x < BOARD_WIDTH; x++ {
+	for y := 0; y < myAgent.Board.Height; y++ {
+		for x := 0; x < myAgent.Board.Width; x++ {
 			p := Position{X: x, Y: y}
 			if myAgent.Board.GetCellState(p) != EMPTY {
 				control[y][x] = -1
@@ -512,8 +648,8 @@ func calculateVoronoiControl(myAgent *Agent, otherAgent *Agent) (int, int, [][]i
 func calculateEdgeBonus(board *GameBoard, control [][]int, owner int) int {
 	bonus := 0
 
-	for y := 0; y < BOARD_HEIGHT; y++ {
-		for x := 0; x < BOARD_WIDTH; x++ {
+	for y := 0; y < board.Height; y++ {
+		for x := 0; x < board.Width; x++ {
 			if control[y][x] != owner {
 				continue
 			}

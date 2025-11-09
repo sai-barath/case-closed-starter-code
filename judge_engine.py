@@ -214,7 +214,7 @@ class Judge:
 def main():
     url1_wins = 0
     url2_wins = 0
-    tot = 2
+    tot = 20
     url1 = "http://localhost:5008"
     url2 = "http://localhost:5009"
     for i in range(tot):

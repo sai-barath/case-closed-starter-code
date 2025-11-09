@@ -359,7 +359,7 @@ func TestTorusEdgeCasesAllDirections(t *testing.T) {
 	board := NewGameBoard(18, 20)
 
 	tests := []struct {
-		pos      Position
+		pos       Position
 		expectedX int
 		expectedY int
 	}{
@@ -650,7 +650,7 @@ func TestBoardStatePersistence(t *testing.T) {
 func TestMassiveTorusWrap(t *testing.T) {
 	board := NewGameBoard(18, 20)
 	tests := []struct {
-		x, y int
+		x, y       int
 		expX, expY int
 	}{
 		{1000, 1000, 1000 % 20, 1000 % 18},
@@ -977,7 +977,7 @@ func TestUndoableMoveBasic(t *testing.T) {
 		t.Errorf("Expected length %d after undo, got %d", initialLength, agent.Length)
 	}
 	if agent.GetHead().X != initialHead.X || agent.GetHead().Y != initialHead.Y {
-		t.Errorf("Expected head back at (%d, %d), got (%d, %d)", 
+		t.Errorf("Expected head back at (%d, %d), got (%d, %d)",
 			initialHead.X, initialHead.Y, agent.GetHead().X, agent.GetHead().Y)
 	}
 	if board.GetCellState(Position{X: 7, Y: 5}) != EMPTY {
@@ -1099,5 +1099,104 @@ func TestUndoableDirectionRestore(t *testing.T) {
 	agent.UndoMove(state, nil)
 	if agent.Direction.DX != initialDir.DX || agent.Direction.DY != initialDir.DY {
 		t.Errorf("Expected direction to restore to original")
+	}
+}
+
+func TestAggressiveBoostDrawScenario(t *testing.T) {
+	// Test the scenario from the game log where P1 boosts RIGHT aggressively
+	// P2 moves DOWN, both end up at same position and should draw
+	board := NewGameBoard(18, 20)
+
+	// Set up P1 at position similar to game log - heading RIGHT
+	agent1 := NewAgent(1, Position{X: 10, Y: 11}, RIGHT, board)
+	// Set up P2 directly above and to the right - heading DOWN
+	agent2 := NewAgent(2, Position{X: 13, Y: 10}, DOWN, board)
+
+	t.Logf("Initial - Agent1 head: %v, Agent2 head: %v", agent1.GetHead(), agent2.GetHead())
+
+	// P1 moves RIGHT with BOOST (moves to 12,11 then 13,11)
+	// But P2 moves DOWN (moves to 13,11)
+	// They collide at 13,11 - but is it head-on or trail collision?
+
+	// Sequential execution: P1 moves first
+	agent1Alive := agent1.Move(RIGHT, agent2, true)
+	t.Logf("After P1 boost RIGHT - Agent1 head: %v, alive: %v", agent1.GetHead(), agent1.Alive)
+
+	// Then P2 moves
+	agent2Alive := agent2.Move(DOWN, agent1, false)
+	t.Logf("After P2 DOWN - Agent2 head: %v, alive: %v", agent2.GetHead(), agent2.Alive)
+
+	// Both should be dead (head-on collision at 13,11)
+	if agent1Alive {
+		t.Error("Agent1 should have died in collision")
+	}
+	if agent2Alive {
+		t.Error("Agent2 should have died in collision")
+	}
+
+	if agent1.Alive {
+		t.Error("Agent1 should be marked as dead")
+	}
+	if agent2.Alive {
+		t.Error("Agent2 should be marked as dead")
+	}
+}
+
+func TestGameStepDrawResult(t *testing.T) {
+	// Test that Game.Step correctly returns Draw when both agents die
+	board := NewGameBoard(18, 20)
+	agent1 := NewAgent(1, Position{X: 10, Y: 11}, RIGHT, board)
+	agent2 := NewAgent(2, Position{X: 13, Y: 10}, DOWN, board)
+
+	game := &Game{
+		Board:  board,
+		Agent1: agent1,
+		Agent2: agent2,
+		Turns:  0,
+	}
+
+	result := game.Step(RIGHT, DOWN, true, false)
+
+	if result == nil {
+		t.Fatal("Expected game to end with a result, got nil")
+	}
+
+	if *result != Draw {
+		t.Errorf("Expected Draw result when both agents die, got %v", *result)
+	}
+
+	if agent1.Alive || agent2.Alive {
+		t.Error("Both agents should be dead after collision")
+	}
+}
+
+func TestSequentialMoveExecution(t *testing.T) {
+	// Test that moves are executed sequentially: P1 first, then P2
+	// P2 sees P1's updated position and collides with it
+	board := NewGameBoard(18, 20)
+
+	// P1 at (10, 12) with trail [(10,12), (10,11)], will move UP to (10,10)
+	agent1 := NewAgent(1, Position{X: 10, Y: 12}, UP, board)
+	// P2 at (10, 8) with trail [(10,8), (10,9)], will move UP to (10,10)
+	agent2 := NewAgent(2, Position{X: 10, Y: 8}, DOWN, board)
+
+	t.Logf("Initial - Agent1 trail: %v, Agent2 trail: %v",
+		agent1.Trail, agent2.Trail)
+
+	// P1 moves UP first to (10, 10)
+	agent1Alive := agent1.Move(UP, agent2, false)
+	t.Logf("After P1 UP - Agent1 head: %v, alive: %v", agent1.GetHead(), agent1Alive)
+
+	// P2 moves DOWN to (10, 10) - should hit P1's new head/trail
+	agent2Alive := agent2.Move(DOWN, agent1, false)
+	t.Logf("After P2 DOWN - Agent2 head: %v, alive: %v", agent2.GetHead(), agent2Alive)
+
+	// P1 survives its move
+	// P2 hits P1's trail and dies
+	if !agent1Alive {
+		t.Error("Agent1 should survive its move")
+	}
+	if agent2Alive {
+		t.Error("Agent2 should die hitting Agent1's trail")
 	}
 }

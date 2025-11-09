@@ -324,3 +324,130 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+type ChamberTree struct {
+	board              *GameBoard
+	articulationPoints map[Position]bool
+}
+
+func NewChamberTree(board *GameBoard) *ChamberTree {
+	apf := NewArticulationPointFinder(board)
+	aps := apf.FindArticulationPoints()
+	return &ChamberTree{
+		board:              board,
+		articulationPoints: aps,
+	}
+}
+
+func (ct *ChamberTree) EvaluateChamberTree(myHead, oppHead Position) int {
+	myScore := ct.evaluateFromPosition(myHead, oppHead, true)
+	oppScore := ct.evaluateFromPosition(oppHead, myHead, false)
+	return myScore - oppScore
+}
+
+func (ct *ChamberTree) evaluateFromPosition(head, opponentHead Position, isMe bool) int {
+	visited := make(map[Position]bool)
+	currentChamberSize := ct.exploreChamber(head, visited)
+
+	battlefrontChambers := make(map[Position]int)
+	ct.findBattlefrontChambers(head, opponentHead, visited, battlefrontChambers)
+
+	bestBattlefrontValue := 0
+	for cutVertex, stepsToEnter := range battlefrontChambers {
+		battlefrontVisited := make(map[Position]bool)
+		battlefrontSize := ct.exploreChamber(cutVertex, battlefrontVisited)
+
+		value := battlefrontSize - stepsToEnter*2
+		if value > bestBattlefrontValue {
+			bestBattlefrontValue = value
+		}
+	}
+
+	if currentChamberSize > bestBattlefrontValue {
+		return currentChamberSize
+	}
+	return bestBattlefrontValue
+}
+
+func (ct *ChamberTree) exploreChamber(start Position, visited map[Position]bool) int {
+	if ct.board.GetCellState(start) != EMPTY {
+		return 0
+	}
+
+	// Only explore the space reachable without crossing articulation point boundaries
+	// We count cells that are not articulation points
+	stack := []Position{start}
+	visited[start] = true
+	count := 0
+
+	// Count start position if it's not an articulation point
+	if !ct.articulationPoints[start] {
+		count++
+	}
+
+	for len(stack) > 0 {
+		current := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+
+		for _, dir := range AllDirections {
+			next := Position{
+				X: current.X + dir.DX,
+				Y: current.Y + dir.DY,
+			}
+			next = ct.board.TorusCheck(next)
+
+			if visited[next] || ct.board.GetCellState(next) != EMPTY {
+				continue
+			}
+
+			visited[next] = true
+
+			// Count non-articulation points and continue exploring
+			if !ct.articulationPoints[next] {
+				count++
+				stack = append(stack, next)
+			}
+			// Articulation points are marked visited but not explored or counted
+		}
+	}
+
+	return count
+}
+
+func (ct *ChamberTree) findBattlefrontChambers(myHead, oppHead Position, myVisited map[Position]bool, battlefronts map[Position]int) {
+	for cutVertex := range ct.articulationPoints {
+		if myVisited[cutVertex] {
+			continue
+		}
+
+		distance := ct.manhattanDistance(myHead, cutVertex)
+
+		oppVisited := make(map[Position]bool)
+		ct.exploreChamber(oppHead, oppVisited)
+
+		if oppVisited[cutVertex] {
+			battlefronts[cutVertex] = distance
+		}
+	}
+}
+
+func (ct *ChamberTree) manhattanDistance(a, b Position) int {
+	dx := a.X - b.X
+	dy := a.Y - b.Y
+
+	if dx < 0 {
+		dx = -dx
+	}
+	if dy < 0 {
+		dy = -dy
+	}
+
+	if dx > ct.board.Width/2 {
+		dx = ct.board.Width - dx
+	}
+	if dy > ct.board.Height/2 {
+		dy = ct.board.Height - dy
+	}
+
+	return dx + dy
+}
