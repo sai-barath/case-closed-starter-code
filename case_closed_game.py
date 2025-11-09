@@ -44,11 +44,11 @@ class GameBoard:
         
         return random.choice(empty_cells)
 
-    def tostr(self, agent1_head=None, agent2_head=None) -> str:
+    def tostr(self, agent1_head=None, agent1_trail=None, agent2_head=None, agent2_trail=None) -> str:
         RED = '\033[31m'
         BLUE = '\033[34m'
         RESET = '\033[0m'
-        chars = {EMPTY: '.', AGENT: 'A'}
+        chars = {EMPTY: '.'}
         board_str = ""
         for y in range(self.height):
             for x in range(self.width):
@@ -56,7 +56,11 @@ class GameBoard:
                 if agent1_head and pos == agent1_head:
                     board_str += f'{RED}A{RESET} '
                 elif agent2_head and pos == agent2_head:
-                    board_str += f'{BLUE}A{RESET} '
+                    board_str += f'{BLUE}B{RESET} '
+                elif agent1_trail and pos in agent1_trail:
+                    board_str += f'{RED}a{RESET} '
+                elif agent2_trail and pos in agent2_trail:
+                    board_str += f'{BLUE}b{RESET} '
                 else:
                     board_str += chars.get(self.grid[y][x], '?') + ' '
             board_str += '\n'
@@ -90,7 +94,7 @@ class GameResult(Enum):
 
 class Agent:
     '''This class represents an agent in the game. It manages the agent's trail using a deque.'''
-    def __init__(self, agent_id: str, start_pos: tuple[int, int], start_dir: Direction, board: GameBoard):
+    def __init__(self, agent_id: int, start_pos: tuple[int, int], start_dir: Direction, board: GameBoard):
         self.agent_id = agent_id
         second = (start_pos[0] + start_dir.value[0], start_pos[1] + start_dir.value[1])
         self.trail = deque([start_pos, second])  # Trail of positions
@@ -191,8 +195,10 @@ class Game:
     
     def __str__(self) -> str:
         agent1_head = self.agent1.trail[-1] if self.agent1.alive and len(self.agent1.trail) > 0 else None
+        agent1_trail = set(list(self.agent1.trail)[:-1]) if self.agent1.alive and len(self.agent1.trail) > 1 else set()
         agent2_head = self.agent2.trail[-1] if self.agent2.alive and len(self.agent2.trail) > 0 else None
-        return self.board.tostr(agent1_head, agent2_head)
+        agent2_trail = set(list(self.agent2.trail)[:-1]) if self.agent2.alive and len(self.agent2.trail) > 1 else set()
+        return self.board.tostr(agent1_head, agent1_trail, agent2_head, agent2_trail)
     
     def reset(self):
         """Resets the game to the initial state."""
