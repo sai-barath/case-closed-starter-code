@@ -136,38 +136,110 @@ def build_bot(bot_dir: str) -> bool:
         return False
 
 
-def play_game(bot1_path: str, bot2_path: str) -> str:
-    """Play a game between two bots. Returns 'bot1', 'bot2', or 'draw'"""
+def play_game(bot1_path: str, bot2_path: str, port1: int = 6000, port2: int = 6001) -> str:
+    """Play a game between two bots using judge engine. Returns 'bot1', 'bot2', or 'draw'"""
+    import socket
+    import requests
+    import time as time_module
+    
+    def check_port(port):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            return s.connect_ex(('localhost', port)) != 0
+    
+    def wait_for_agent(port, timeout=5):
+        url = f"http://localhost:{port}"
+        start = time_module.time()
+        while time_module.time() - start < timeout:
+            try:
+                response = requests.get(url, timeout=1)
+                if response.status_code == 200:
+                    return True
+            except:
+                pass
+            time_module.sleep(0.1)
+        return False
+    
+    bot1_proc = None
+    bot2_proc = None
+    
     try:
+        # Check ports available
+        if not check_port(port1) or not check_port(port2):
+            return 'draw'  # Port busy
+        
+        # Start bot1
+        env1 = os.environ.copy()
+        env1["PORT"] = str(port1)
+        env1["AGENT_NAME"] = f"Bot1-{port1}"
+        env1["PARTICIPANT"] = "Bot1"
+        bot1_proc = subprocess.Popen(
+            [bot1_path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=env1
+        )
+        
+        # Start bot2
+        env2 = os.environ.copy()
+        env2["PORT"] = str(port2)
+        env2["AGENT_NAME"] = f"Bot2-{port2}"
+        env2["PARTICIPANT"] = "Bot2"
+        bot2_proc = subprocess.Popen(
+            [bot2_path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=env2
+        )
+        
+        # Wait for agents to start
+        if not wait_for_agent(port1) or not wait_for_agent(port2):
+            return 'draw'  # Failed to start
+        
+        # Run judge
+        env_judge = os.environ.copy()
+        env_judge["PLAYER1_URL"] = f"http://localhost:{port1}"
+        env_judge["PLAYER2_URL"] = f"http://localhost:{port2}"
+        
         result = subprocess.run(
-            ['python3', 'local-tester.py', bot1_path, bot2_path],
+            ["uv", "run", "default-judge.py"],
             capture_output=True,
             text=True,
-            timeout=60
+            env=env_judge,
+            timeout=30
         )
         
         output = result.stdout + result.stderr
         
-        # Parse result
-        if 'Player 1 wins' in output or 'Winner: Player 1' in output:
+        # Debug: Save 10% of games for inspection
+        if random.random() < 0.1:
+            with open(f'/tmp/game_debug_{port1}.txt', 'w') as f:
+                f.write(output)
+            print(f" [saved debug]", end='')
+        
+        # Parse result - check for winner strings from default-judge.py
+        if 'Winner: Agent 1' in output:
             return 'bot1'
-        elif 'Player 2 wins' in output or 'Winner: Player 2' in output:
+        elif 'Winner: Agent 2' in output:
             return 'bot2'
-        elif 'Draw' in output or 'draw' in output.lower():
+        elif 'DRAW' in output or 'Draw' in output or 'both agents died' in output.lower():
             return 'draw'
         else:
-            # Try to parse from the output
-            lines = output.split('\n')
-            for line in lines:
-                if 'winner' in line.lower():
-                    if '1' in line:
-                        return 'bot1'
-                    elif '2' in line:
-                        return 'bot2'
+            # Unknown result - print snippet
+            print(f" [UNKNOWN OUTPUT: {output[-300:]}...]", end='')
             return 'draw'
+            
     except Exception as e:
-        print(f"Game error: {e}")
+        print(f" [ERROR: {e}]", end='')
         return 'draw'
+    finally:
+        # Kill bots
+        if bot1_proc:
+            bot1_proc.kill()
+            bot1_proc.wait()
+        if bot2_proc:
+            bot2_proc.kill()
+            bot2_proc.wait()
+        time_module.sleep(0.5)  # Let ports free up
 
 
 def tournament(population: List[BotParams], games_per_matchup: int = 10) -> List[BotParams]:
@@ -188,7 +260,7 @@ def tournament(population: List[BotParams], games_per_matchup: int = 10) -> List
         
         # Copy files
         for file in ['agent.go', 'agent_logic.go', 'game_logic.go', 'spacefilling.go', 'go.mod']:
-            subprocess.run(['cp', f'steamroller0/{file}', f'{bot_dir}/{file}'], check=True)
+            subprocess.run(['cp', f'steamroller0/{file}', f'{bot_dir}/{file}'])
         
         # Write parameters
         write_params_to_file(params, bot_dir)
@@ -204,44 +276,60 @@ def tournament(population: List[BotParams], games_per_matchup: int = 10) -> List
             bot_dirs.append(None)
     
     # Run games
+    game_num = 0
     for i in range(len(population)):
         for j in range(i + 1, len(population)):
             if bot_dirs[i] is None or bot_dirs[j] is None:
                 continue
             
-            print(f"\nBot {i} vs Bot {j}:")
+            print(f"\n  Bot {i} vs Bot {j}: ", end='')
+            bot_i_wins = 0
+            bot_j_wins = 0
+            draws = 0
             
-            for game_num in range(games_per_matchup):
+            for game in range(games_per_matchup):
+                # Use unique ports for each game
+                port1 = 7000 + (game_num * 2)
+                port2 = 7000 + (game_num * 2) + 1
+                game_num += 1
+                
                 # Alternate who plays first
-                if game_num % 2 == 0:
-                    result = play_game(f'{bot_dirs[i]}/steamroller', f'{bot_dirs[j]}/steamroller')
+                if game % 2 == 0:
+                    result = play_game(f'{bot_dirs[i]}/steamroller', f'{bot_dirs[j]}/steamroller', port1, port2)
                     if result == 'bot1':
                         population[i].wins += 1
                         population[j].losses += 1
+                        bot_i_wins += 1
                         print("1", end='')
                     elif result == 'bot2':
                         population[i].losses += 1
                         population[j].wins += 1
+                        bot_j_wins += 1
                         print("2", end='')
                     else:
                         population[i].draws += 1
                         population[j].draws += 1
+                        draws += 1
                         print("=", end='')
                 else:
-                    result = play_game(f'{bot_dirs[j]}/steamroller', f'{bot_dirs[i]}/steamroller')
+                    result = play_game(f'{bot_dirs[j]}/steamroller', f'{bot_dirs[i]}/steamroller', port1, port2)
                     if result == 'bot1':
                         population[j].wins += 1
                         population[i].losses += 1
+                        bot_j_wins += 1
                         print("2", end='')
                     elif result == 'bot2':
                         population[j].losses += 1
                         population[i].wins += 1
+                        bot_i_wins += 1
                         print("1", end='')
                     else:
                         population[i].draws += 1
                         population[j].draws += 1
+                        draws += 1
                         print("=", end='')
-            print()
+            
+            print(f"  →  Bot{i}: {bot_i_wins}W, Bot{j}: {bot_j_wins}W, Draws: {draws}")
     
     # Cleanup temp directories
     for bot_dir in bot_dirs:
@@ -288,7 +376,8 @@ def evolve(population_size: int = 8, generations: int = 10, games_per_matchup: i
         
         # Evolve next generation
         # Keep top 25%, breed them to fill 50%, random mutations for 25%
-        survivors = population[:population_size // 4]
+        num_survivors = max(1, population_size // 4)  # At least 1 survivor
+        survivors = population[:num_survivors]
         
         next_gen = survivors.copy()
         
