@@ -313,6 +313,17 @@ func evaluatePosition(myAgent *Agent, otherAgent *Agent) int {
 	boostDiff := myAgent.BoostsRemaining - otherAgent.BoostsRemaining
 	score += boostDiff * 20
 
+	apf := NewArticulationPointFinder(myAgent.Board)
+	aps := apf.FindArticulationPoints()
+
+	myHead := myAgent.GetHead()
+	mySpaceFillingScore := EvaluateSpaceFilling(myAgent.Board, myHead, aps)
+
+	oppHead := otherAgent.GetHead()
+	oppSpaceFillingScore := EvaluateSpaceFilling(otherAgent.Board, oppHead, aps)
+
+	score += (mySpaceFillingScore - oppSpaceFillingScore) / 10
+
 	return score
 }
 
