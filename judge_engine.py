@@ -212,14 +212,14 @@ class Judge:
             
 
 def main():
-    p1W = 0
-    p2W = 0
+    url1_wins = 0
+    url2_wins = 0
     tot = 2
+    url1 = "http://localhost:5008"
+    url2 = "http://localhost:5009"
     for i in range(tot):
         print(f"{i}, Judge engine starting up, waiting for agents...")
         time.sleep(5)
-        url1 = "http://localhost:5008"
-        url2 = "http://localhost:5009"
         # Get agent URLs from environment variables
         PLAYER1_URL = os.getenv("PLAYER1_URL", url1 if i % 2 == 0 else url2)
         PLAYER2_URL = os.getenv("PLAYER2_URL", url2 if i % 2 == 0 else url1)
@@ -268,8 +268,11 @@ def main():
                         print("Player 1 forfeited")
                         judge.end_game(GameResult.AGENT2_WIN)
                         print("Game String:", judge.game_str)
-                        p2W +=1
-                        return
+                        if PLAYER2_URL == url1:
+                            url1_wins += 1
+                        else:
+                            url2_wins += 1
+                        break
                     elif validation:
                         p1_boost = validation[1]  # Extract boost flag
                         p1_direction = validation[2]  # Extract direction
@@ -291,8 +294,11 @@ def main():
                     print("Player 1 has no random moves left. Forfeiting.")
                     judge.end_game(GameResult.AGENT2_WIN)
                     print("Game String:", judge.game_str)
-                    p2W +=1
-                    return
+                    if PLAYER2_URL == url1:
+                        url1_wins += 1
+                    else:
+                        url2_wins += 1
+                    break
             else:
                 # Direction already extracted from validation
                 pass
@@ -307,8 +313,11 @@ def main():
                         print("Player 2 forfeited")
                         judge.end_game(GameResult.AGENT1_WIN)
                         print("Game String:", judge.game_str)
-                        p1W += 1
-                        return
+                        if PLAYER1_URL == url1:
+                            url1_wins += 1
+                        else:
+                            url2_wins += 1
+                        break
                     elif validation:
                         p2_boost = validation[1]  # Extract boost flag
                         p2_direction = validation[2]  # Extract direction
@@ -330,8 +339,11 @@ def main():
                     print("Player 2 has no random moves left. Forfeiting.")
                     judge.end_game(GameResult.AGENT1_WIN)
                     print("Game String:", judge.game_str)
-                    p1W += 1
-                    return
+                    if PLAYER1_URL == url1:
+                        url1_wins += 1
+                    else:
+                        url2_wins += 1
+                    break
             else:
                 # Direction already extracted from validation
                 pass
@@ -352,9 +364,15 @@ def main():
             if result is not None:
                 judge.end_game(result)
                 if result == GameResult.AGENT1_WIN:
-                    p1W += 1
+                    if PLAYER1_URL == url1:
+                        url1_wins += 1
+                    else:
+                        url2_wins += 1
                 elif result == GameResult.AGENT2_WIN:
-                    p2W +=1
+                    if PLAYER2_URL == url1:
+                        url1_wins += 1
+                    else:
+                        url2_wins += 1
                 print("Game String:", judge.game_str)
                 break
             
@@ -364,9 +382,9 @@ def main():
                 judge.end_game(GameResult.DRAW)
                 print("Game String:", judge.game_str)
                 break
-    print(f"P1 ({judge.p1_agent.agent_name}) Wins: {p1W}")
-    print(f"P2 ({judge.p2_agent.agent_name}) Wins: {p2W}")
-    print(f"Ties: {tot - p1W - p2W}")
+    print(f"URL1 ({url1}) Wins: {url1_wins}")
+    print(f"URL2 ({url2}) Wins: {url2_wins}")
+    print(f"Ties: {tot - url1_wins - url2_wins}")
     print(f"total: {tot}")
 
 
