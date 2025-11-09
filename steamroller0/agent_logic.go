@@ -11,39 +11,89 @@ import (
 var debugMode = os.Getenv("DEBUG") == "1"
 
 const (
-	SEARCH_TIME_LIMIT = 100 * time.Millisecond
-	WIN_SCORE         = 10000
-	LOSE_SCORE        = -10000
-	DRAW_SCORE        = 0
-	BOARD_HEIGHT      = 18
-	BOARD_WIDTH       = 20
+	SEARCH_TIME_LIMIT         = 1000 * time.Millisecond
+	WIN_SCORE                 = 10000
+	LOSE_SCORE                = -10000
+	DRAW_SCORE                = 0
+	BOARD_HEIGHT              = 18
+	BOARD_WIDTH               = 20
+	TT_SIZE                   = 1 << 20
+	ASPIRATION_WINDOW_INIT    = 50
+	NULL_MOVE_R_SHALLOW       = 2
+	NULL_MOVE_R_DEEP          = 3
+	LMR_BASE                  = 2.5
+	QSEARCH_MAX_DEPTH         = 8
+	KILLER_MOVES_PER_PLY      = 2
+	MAX_SEARCH_DEPTH          = 50
+	MVV_LVA_MULTIPLIER        = 100
+	ADAPTIVE_DEPTH_MULTIPLIER = 0.4
+	ADAPTIVE_DEPTH_BASE       = 3
 )
 
 // Tunable parameters for evolutionary training
 var (
-	// WEIGHT_TERRITORY      = 26
-	// WEIGHT_FREEDOM        = 120
-	// WEIGHT_REACHABLE      = 136
-	// WEIGHT_BOOST          = 14
-	// WEIGHT_CHAMBER        = 30
-	// WEIGHT_EDGE           = -10 // NEGATIVE = avoid edges
-	// WEIGHT_COMPACTNESS    = -15 // NEGATIVE = spread out
-	// WEIGHT_CUTOFF         = 12
-	// WEIGHT_GROWTH         = 30
-	// PENALTY_CORRIDOR_BASE = 500
-	// PENALTY_HEAD_DISTANCE = 200
-	WEIGHT_TERRITORY      = 140
-	WEIGHT_FREEDOM        = 105
-	WEIGHT_REACHABLE      = 110
-	WEIGHT_BOOST          = 19
-	WEIGHT_CHAMBER        = 9
-	WEIGHT_EDGE           = 37
-	WEIGHT_COMPACTNESS    = -18
-	WEIGHT_CUTOFF         = 2
-	WEIGHT_GROWTH         = 9
-	PENALTY_CORRIDOR_BASE = 677
-	PENALTY_HEAD_DISTANCE = 94
+	// Base heuristics
+	// WEIGHT_TERRITORY      = 140
+	// WEIGHT_FREEDOM        = 105
+	// WEIGHT_REACHABLE      = 110
+	// WEIGHT_BOOST          = 19
+	// WEIGHT_CHAMBER        = 9
+	// WEIGHT_EDGE           = 37
+	// WEIGHT_COMPACTNESS    = -18
+	// WEIGHT_CUTOFF         = 2
+	// WEIGHT_GROWTH         = 9
+	// PENALTY_CORRIDOR_BASE = 677
+	// PENALTY_HEAD_DISTANCE = 94
 
+	// // Advanced heuristics
+	// WEIGHT_VORONOI_SECOND_ORDER = 80
+	// WEIGHT_POTENTIAL_MOBILITY   = 90
+	// WEIGHT_TRAIL_THREAT         = 120
+	// WEIGHT_INFLUENCE            = 60
+	// WEIGHT_WALL_PENALTY         = 200
+	// WEIGHT_TERRITORY_DENSITY    = 40
+	// WEIGHT_ESCAPE_ROUTES        = 150
+	// WEIGHT_OPPONENT_MOBILITY    = 70
+	// WEIGHT_LOOKAHEAD_CONTROL    = 85
+	// WEIGHT_SPACE_EFFICIENCY     = 55
+	// WEIGHT_AGGRESSIVE_CUTOFF    = 110
+	// WEIGHT_DEFENSIVE_SPACING    = 75
+	// WEIGHT_CENTER_CONTROL       = 45
+	// WEIGHT_FUTURE_TERRITORY     = 95
+	// WEIGHT_MOBILITY_PROJECTION  = 65
+	// WEIGHT_CHOKE_POINT          = 50
+
+	EARLY_GAME_EXPANSION        = 2.0
+	MID_GAME_BALANCE            = 1.0
+	LATE_GAME_TERRITORY         = 1.5
+	ENDGAME_SURVIVAL            = 3.0
+	WEIGHT_TERRITORY            = 200
+	WEIGHT_FREEDOM              = 171
+	WEIGHT_REACHABLE            = 193
+	WEIGHT_BOOST                = 14
+	WEIGHT_CHAMBER              = 62
+	WEIGHT_EDGE                 = -12
+	WEIGHT_COMPACTNESS          = -30
+	WEIGHT_CUTOFF               = 59
+	WEIGHT_GROWTH               = 59
+	PENALTY_CORRIDOR_BASE       = 181
+	PENALTY_HEAD_DISTANCE       = 135
+	WEIGHT_VORONOI_SECOND_ORDER = 133
+	WEIGHT_POTENTIAL_MOBILITY   = 18
+	WEIGHT_TRAIL_THREAT         = 8
+	WEIGHT_INFLUENCE            = 75
+	WEIGHT_WALL_PENALTY         = 80
+	WEIGHT_TERRITORY_DENSITY    = 99
+	WEIGHT_ESCAPE_ROUTES        = 225
+	WEIGHT_OPPONENT_MOBILITY    = 41
+	WEIGHT_LOOKAHEAD_CONTROL    = 79
+	WEIGHT_SPACE_EFFICIENCY     = 22
+	WEIGHT_AGGRESSIVE_CUTOFF    = 30
+	WEIGHT_DEFENSIVE_SPACING    = 15
+	WEIGHT_CENTER_CONTROL       = 52
+	WEIGHT_FUTURE_TERRITORY     = 80
+	WEIGHT_MOBILITY_PROJECTION  = 75
+	WEIGHT_CHOKE_POINT          = 98
 )
 
 func logDebug(format string, args ...interface{}) {
@@ -66,13 +116,87 @@ type Move struct {
 	score     int
 }
 
+type BoundType int
+
+const (
+	EXACT_BOUND BoundType = iota
+	ALPHA_BOUND
+	BETA_BOUND
+)
+
+type TranspositionEntry struct {
+	zobristKey uint64
+	depth      int
+	score      int
+	bestMove   Direction
+	useBoost   bool
+	boundType  BoundType
+}
+
+type KillerMoves struct {
+	moves [MAX_SEARCH_DEPTH][KILLER_MOVES_PER_PLY]Direction
+}
+
+type HistoryTable struct {
+	scores [4][BOARD_HEIGHT][BOARD_WIDTH]int
+}
+
 type SearchContext struct {
-	startTime time.Time
-	deadline  time.Time
+	startTime     time.Time
+	deadline      time.Time
+	tt            map[uint64]*TranspositionEntry
+	killers       *KillerMoves
+	history       *HistoryTable
+	nodesSearched int
+	ttHits        int
+	ttCutoffs     int
 }
 
 func (ctx *SearchContext) timeExpired() bool {
 	return time.Now().After(ctx.deadline)
+}
+
+func (km *KillerMoves) add(depth int, move Direction) {
+	if depth >= MAX_SEARCH_DEPTH || depth < 0 {
+		return
+	}
+	if km.moves[depth][0] != move {
+		km.moves[depth][1] = km.moves[depth][0]
+		km.moves[depth][0] = move
+	}
+}
+
+func (km *KillerMoves) isKiller(depth int, move Direction) bool {
+	if depth >= MAX_SEARCH_DEPTH || depth < 0 {
+		return false
+	}
+	return km.moves[depth][0] == move || km.moves[depth][1] == move
+}
+
+func (ht *HistoryTable) add(dir Direction, depth int, pos Position) {
+	if int(dir) < 4 && pos.X < BOARD_WIDTH && pos.Y < BOARD_HEIGHT && pos.X >= 0 && pos.Y >= 0 {
+		ht.scores[dir][pos.Y][pos.X] += depth * depth
+	}
+}
+
+func (ht *HistoryTable) get(dir Direction, pos Position) int {
+	if int(dir) < 4 && pos.X < BOARD_WIDTH && pos.Y < BOARD_HEIGHT && pos.X >= 0 && pos.Y >= 0 {
+		return ht.scores[dir][pos.Y][pos.X]
+	}
+	return 0
+}
+
+func computeZobrist(myAgent *Agent, otherAgent *Agent) uint64 {
+	var hash uint64 = 0
+	for _, pos := range myAgent.Trail {
+		hash ^= uint64(pos.X*BOARD_WIDTH + pos.Y)
+	}
+	for _, pos := range otherAgent.Trail {
+		hash ^= uint64((pos.X*BOARD_WIDTH + pos.Y) * 31337)
+	}
+	hash ^= uint64(myAgent.BoostsRemaining) << 32
+	hash ^= uint64(otherAgent.BoostsRemaining) << 40
+	return hash
 }
 
 func DecideMove(myTrail, otherTrail [][]int, turnCount, myBoosts, playerNumber int) string {
@@ -100,8 +224,14 @@ func DecideMove(myTrail, otherTrail [][]int, turnCount, myBoosts, playerNumber i
 	}
 
 	ctx := SearchContext{
-		startTime: time.Now(),
-		deadline:  time.Now().Add(SEARCH_TIME_LIMIT),
+		startTime:     time.Now(),
+		deadline:      time.Now().Add(SEARCH_TIME_LIMIT),
+		tt:            make(map[uint64]*TranspositionEntry, TT_SIZE),
+		killers:       &KillerMoves{},
+		history:       &HistoryTable{},
+		nodesSearched: 0,
+		ttHits:        0,
+		ttCutoffs:     0,
 	}
 
 	bestMove := iterativeDeepeningSearch(snapshot, &ctx)
@@ -109,6 +239,10 @@ func DecideMove(myTrail, otherTrail [][]int, turnCount, myBoosts, playerNumber i
 	if debugMode {
 		myVoronoi, oppVoronoi, _ := calculateVoronoiControl(snapshot.myAgent, snapshot.otherAgent)
 		logDebug("Voronoi control - Me: %d, Opp: %d, Neutral: %d", myVoronoi, oppVoronoi, BOARD_HEIGHT*BOARD_WIDTH-myVoronoi-oppVoronoi)
+		logDebug("Search stats - Nodes: %d, TT hits: %d, TT cutoffs: %d", ctx.nodesSearched, ctx.ttHits, ctx.ttCutoffs)
+		if ctx.nodesSearched > 0 {
+			logDebug("TT hit rate: %.1f%%", float64(ctx.ttHits)*100.0/float64(ctx.nodesSearched))
+		}
 	}
 
 	elapsed := time.Since(ctx.startTime)
@@ -130,19 +264,57 @@ func iterativeDeepeningSearch(snapshot GameStateSnapshot, ctx *SearchContext) Mo
 	}
 
 	bestMove := Move{direction: validMoves[0], useBoost: false, score: math.MinInt32}
+	prevScore := 0
 
 	depth := 1
-	for !ctx.timeExpired() {
+	for !ctx.timeExpired() && depth <= MAX_SEARCH_DEPTH {
 		logDebug("Searching at depth %d...", depth)
 
-		depthBestMove := searchAtDepth(snapshot, depth, ctx)
+		window := ASPIRATION_WINDOW_INIT
+		alpha := prevScore - window
+		beta := prevScore + window
 
-		if ctx.timeExpired() {
-			logDebug("Time expired during depth %d, using previous result", depth)
-			break
+		if depth == 1 {
+			alpha = math.MinInt32
+			beta = math.MaxInt32
+		}
+
+		var depthBestMove Move
+		failedHigh := false
+		failedLow := false
+
+		for {
+			depthBestMove = searchAtDepth(snapshot, depth, alpha, beta, ctx)
+
+			if ctx.timeExpired() {
+				logDebug("Time expired during depth %d, using previous result", depth)
+				return bestMove
+			}
+
+			if depthBestMove.score <= alpha {
+				failedLow = true
+				alpha = depthBestMove.score - window
+				window *= 2
+				logDebug("Aspiration window fail-low, widening to [%d, %d]", alpha, beta)
+			} else if depthBestMove.score >= beta {
+				failedHigh = true
+				beta = depthBestMove.score + window
+				window *= 2
+				logDebug("Aspiration window fail-high, widening to [%d, %d]", alpha, beta)
+			} else {
+				break
+			}
+
+			if window > WIN_SCORE {
+				alpha = math.MinInt32
+				beta = math.MaxInt32
+				logDebug("Aspiration window too wide, using full window")
+				continue
+			}
 		}
 
 		bestMove = depthBestMove
+		prevScore = bestMove.score
 
 		logDebug("Completed depth %d: best move %s (boost=%v) with score %d",
 			depth, directionToString(bestMove.direction), bestMove.useBoost, bestMove.score)
@@ -159,62 +331,140 @@ func iterativeDeepeningSearch(snapshot GameStateSnapshot, ctx *SearchContext) Mo
 	return bestMove
 }
 
-func searchAtDepth(snapshot GameStateSnapshot, maxDepth int, ctx *SearchContext) Move {
+func searchAtDepth(snapshot GameStateSnapshot, maxDepth int, alpha int, beta int, ctx *SearchContext) Move {
 	validMoves := snapshot.myAgent.GetValidMoves()
 
 	if len(validMoves) == 0 {
 		return Move{direction: RIGHT, useBoost: false, score: LOSE_SCORE}
 	}
 
-	// Shuffle move order for variety in exploration
-	rand.Shuffle(len(validMoves), func(i, j int) {
-		validMoves[i], validMoves[j] = validMoves[j], validMoves[i]
-	})
+	zobrist := computeZobrist(snapshot.myAgent, snapshot.otherAgent)
+	ttMove := Direction(-1)
+	if entry, ok := ctx.tt[zobrist]; ok && entry.depth >= maxDepth {
+		ttMove = entry.bestMove
+	}
 
-	bestMove := Move{direction: validMoves[0], useBoost: false, score: math.MinInt32}
-	alpha := math.MinInt32
-	beta := math.MaxInt32
+	scoredMoves := make([]struct {
+		dir      Direction
+		useBoost bool
+		score    int
+	}, 0, len(validMoves)*2)
 
 	for _, dir := range validMoves {
-		if ctx.timeExpired() {
-			return bestMove
-		}
-
 		for _, useBoost := range []bool{false, true} {
 			if useBoost && snapshot.myAgent.BoostsRemaining <= 0 {
 				continue
 			}
-
-			// Safety check + tactical check
 			if useBoost && (!isBoostSafe(snapshot, dir) || !shouldUseBoost(snapshot, dir)) {
 				continue
 			}
 
-			if ctx.timeExpired() {
-				return bestMove
-			}
+			moveScore := scoreMoveForOrdering(snapshot, dir, useBoost, ttMove, ctx, maxDepth)
+			scoredMoves = append(scoredMoves, struct {
+				dir      Direction
+				useBoost bool
+				score    int
+			}{dir, useBoost, moveScore})
+		}
+	}
 
-			score := evaluateMoveAtDepth(snapshot, dir, useBoost, maxDepth, alpha, beta, ctx)
+	sortMoves(scoredMoves)
 
-			if score > bestMove.score {
-				bestMove = Move{
-					direction: dir,
-					useBoost:  useBoost,
-					score:     score,
-				}
-				alpha = score
-			}
+	bestMove := Move{direction: validMoves[0], useBoost: false, score: math.MinInt32}
 
-			if alpha >= beta {
-				return bestMove
+	for idx, sm := range scoredMoves {
+		if ctx.timeExpired() {
+			return bestMove
+		}
+
+		reduction := 0
+		if idx >= 4 && maxDepth >= 3 && !sm.useBoost {
+			reduction = int(math.Log(float64(maxDepth)) * math.Log(float64(idx)) / LMR_BASE)
+			if reduction > maxDepth-1 {
+				reduction = maxDepth - 1
 			}
 		}
+
+		score := evaluateMoveAtDepth(snapshot, sm.dir, sm.useBoost, maxDepth-reduction, alpha, beta, ctx, maxDepth)
+
+		if reduction > 0 && score > alpha {
+			score = evaluateMoveAtDepth(snapshot, sm.dir, sm.useBoost, maxDepth, alpha, beta, ctx, maxDepth)
+		}
+
+		if score > bestMove.score {
+			bestMove = Move{
+				direction: sm.dir,
+				useBoost:  sm.useBoost,
+				score:     score,
+			}
+			alpha = score
+		}
+
+		if alpha >= beta {
+			if !sm.useBoost {
+				ctx.killers.add(maxDepth, sm.dir)
+				myHead := snapshot.myAgent.GetHead()
+				ctx.history.add(sm.dir, maxDepth, myHead)
+			}
+			break
+		}
+	}
+
+	boundType := EXACT_BOUND
+	if bestMove.score <= alpha {
+		boundType = ALPHA_BOUND
+	} else if bestMove.score >= beta {
+		boundType = BETA_BOUND
+	}
+
+	ctx.tt[zobrist] = &TranspositionEntry{
+		zobristKey: zobrist,
+		depth:      maxDepth,
+		score:      bestMove.score,
+		bestMove:   bestMove.direction,
+		useBoost:   bestMove.useBoost,
+		boundType:  boundType,
 	}
 
 	return bestMove
 }
 
-func evaluateMoveAtDepth(snapshot GameStateSnapshot, dir Direction, useBoost bool, maxDepth int, alpha int, beta int, ctx *SearchContext) int {
+func scoreMoveForOrdering(snapshot GameStateSnapshot, dir Direction, useBoost bool, ttMove Direction, ctx *SearchContext, depth int) int {
+	score := 0
+
+	if dir == ttMove {
+		score += 10000
+	}
+
+	if ctx.killers.isKiller(depth, dir) {
+		score += 5000
+	}
+
+	myHead := snapshot.myAgent.GetHead()
+	score += ctx.history.get(dir, myHead)
+
+	if useBoost {
+		score += 1000
+	}
+
+	return score
+}
+
+func sortMoves(moves []struct {
+	dir      Direction
+	useBoost bool
+	score    int
+}) {
+	for i := 0; i < len(moves); i++ {
+		for j := i + 1; j < len(moves); j++ {
+			if moves[j].score > moves[i].score {
+				moves[i], moves[j] = moves[j], moves[i]
+			}
+		}
+	}
+}
+
+func evaluateMoveAtDepth(snapshot GameStateSnapshot, dir Direction, useBoost bool, maxDepth int, alpha int, beta int, ctx *SearchContext, originalDepth int) int {
 	bestScore := math.MinInt32
 
 	oppValidMoves := snapshot.otherAgent.GetValidMoves()
@@ -224,7 +474,6 @@ func evaluateMoveAtDepth(snapshot GameStateSnapshot, dir Direction, useBoost boo
 			return bestScore
 		}
 
-		// Consider opponent boost options
 		for _, oppUseBoost := range []bool{false, true} {
 			if oppUseBoost && snapshot.otherAgent.BoostsRemaining <= 0 {
 				continue
@@ -236,19 +485,15 @@ func evaluateMoveAtDepth(snapshot GameStateSnapshot, dir Direction, useBoost boo
 
 			var score int
 			if snapshot.amIRed {
-				// P1 moves first in reality, so opponent sees my move and reacts
-				// Simulate my move first, then opponent's reaction
 				_, myState := snapshot.myAgent.UndoableMove(dir, snapshot.otherAgent, useBoost)
 				_, oppState := snapshot.otherAgent.UndoableMove(oppDir, snapshot.myAgent, oppUseBoost)
-				score = alphabeta(snapshot.myAgent, snapshot.otherAgent, maxDepth-1, alpha, beta, true, ctx, snapshot.turnCount)
+				score = alphabeta(snapshot.myAgent, snapshot.otherAgent, maxDepth-1, alpha, beta, true, ctx, snapshot.turnCount, originalDepth)
 				snapshot.otherAgent.UndoMove(oppState, snapshot.myAgent)
 				snapshot.myAgent.UndoMove(myState, snapshot.otherAgent)
 			} else {
-				// P2 sees P1's move and can react to it
-				// Simulate opponent's move first, then my reaction
 				_, oppState := snapshot.otherAgent.UndoableMove(oppDir, snapshot.myAgent, oppUseBoost)
 				_, myState := snapshot.myAgent.UndoableMove(dir, snapshot.otherAgent, useBoost)
-				score = alphabeta(snapshot.myAgent, snapshot.otherAgent, maxDepth-1, alpha, beta, true, ctx, snapshot.turnCount)
+				score = alphabeta(snapshot.myAgent, snapshot.otherAgent, maxDepth-1, alpha, beta, true, ctx, snapshot.turnCount, originalDepth)
 				snapshot.myAgent.UndoMove(myState, snapshot.otherAgent)
 				snapshot.otherAgent.UndoMove(oppState, snapshot.myAgent)
 			}
@@ -270,19 +515,59 @@ func evaluateMoveAtDepth(snapshot GameStateSnapshot, dir Direction, useBoost boo
 	return bestScore
 }
 
-func alphabeta(myAgent *Agent, otherAgent *Agent, depth int, alpha int, beta int, isMaximizing bool, ctx *SearchContext, turnCount int) int {
+func alphabeta(myAgent *Agent, otherAgent *Agent, depth int, alpha int, beta int, isMaximizing bool, ctx *SearchContext, turnCount int, searchDepth int) int {
+	ctx.nodesSearched++
+
 	if ctx.timeExpired() {
-		return evaluatePosition(myAgent, otherAgent, turnCount)
+		return evaluatePositionWithDepth(myAgent, otherAgent, turnCount, depth, searchDepth)
 	}
 
 	if depth == 0 || !myAgent.Alive || !otherAgent.Alive {
-		return evaluatePosition(myAgent, otherAgent, turnCount)
+		return quiescenceSearch(myAgent, otherAgent, alpha, beta, QSEARCH_MAX_DEPTH, ctx, turnCount, searchDepth)
+	}
+
+	zobrist := computeZobrist(myAgent, otherAgent)
+	if entry, ok := ctx.tt[zobrist]; ok {
+		ctx.ttHits++
+		if entry.depth >= depth {
+			if entry.boundType == EXACT_BOUND {
+				ctx.ttCutoffs++
+				return entry.score
+			} else if entry.boundType == ALPHA_BOUND && entry.score <= alpha {
+				ctx.ttCutoffs++
+				return entry.score
+			} else if entry.boundType == BETA_BOUND && entry.score >= beta {
+				ctx.ttCutoffs++
+				return entry.score
+			}
+		}
+	}
+
+	if isMaximizing && depth >= 3 {
+		staticEval := evaluatePositionWithDepth(myAgent, otherAgent, turnCount, depth, searchDepth)
+		if staticEval >= beta && len(myAgent.GetValidMoves()) > 0 {
+			R := NULL_MOVE_R_SHALLOW
+			if depth > 6 {
+				R = NULL_MOVE_R_DEEP
+			}
+
+			score := -alphabeta(otherAgent, myAgent, depth-R-1, -beta, -beta+1, true, ctx, turnCount, searchDepth)
+			if score >= beta {
+				return beta
+			}
+		}
 	}
 
 	if isMaximizing {
 		maxScore := math.MinInt32
+		bestMove := Direction(-1)
 
-		for _, myDir := range myAgent.GetValidMoves() {
+		validMoves := myAgent.GetValidMoves()
+		if len(validMoves) == 0 {
+			return evaluatePositionWithDepth(myAgent, otherAgent, turnCount, depth, searchDepth)
+		}
+
+		for _, myDir := range validMoves {
 			if ctx.timeExpired() {
 				return maxScore
 			}
@@ -296,7 +581,7 @@ func alphabeta(myAgent *Agent, otherAgent *Agent, depth int, alpha int, beta int
 
 				_, myState := myAgent.UndoableMove(myDir, otherAgent, false)
 				_, oppState := otherAgent.UndoableMove(oppDir, myAgent, false)
-				score := alphabeta(myAgent, otherAgent, depth-1, alpha, beta, true, ctx, turnCount)
+				score := alphabeta(myAgent, otherAgent, depth-1, alpha, beta, true, ctx, turnCount, searchDepth)
 				otherAgent.UndoMove(oppState, myAgent)
 				myAgent.UndoMove(myState, otherAgent)
 
@@ -311,21 +596,56 @@ func alphabeta(myAgent *Agent, otherAgent *Agent, depth int, alpha int, beta int
 
 			if minOpponentScore > maxScore {
 				maxScore = minOpponentScore
+				bestMove = myDir
 			}
 
 			alpha = max(alpha, minOpponentScore)
 			if beta <= alpha {
-				return maxScore
+				break
 			}
+		}
+
+		boundType := EXACT_BOUND
+		if maxScore <= alpha {
+			boundType = ALPHA_BOUND
+		} else if maxScore >= beta {
+			boundType = BETA_BOUND
+		}
+
+		ctx.tt[zobrist] = &TranspositionEntry{
+			zobristKey: zobrist,
+			depth:      depth,
+			score:      maxScore,
+			bestMove:   bestMove,
+			useBoost:   false,
+			boundType:  boundType,
 		}
 
 		return maxScore
 	}
 
-	return evaluatePosition(myAgent, otherAgent, turnCount)
+	return evaluatePositionWithDepth(myAgent, otherAgent, turnCount, depth, searchDepth)
 }
 
-func evaluatePosition(myAgent *Agent, otherAgent *Agent, turnCount int) int {
+func quiescenceSearch(myAgent *Agent, otherAgent *Agent, alpha int, beta int, qDepth int, ctx *SearchContext, turnCount int, searchDepth int) int {
+	standPat := evaluatePositionWithDepth(myAgent, otherAgent, turnCount, 0, searchDepth)
+
+	if qDepth <= 0 || ctx.timeExpired() {
+		return standPat
+	}
+
+	if standPat >= beta {
+		return beta
+	}
+
+	if standPat > alpha {
+		alpha = standPat
+	}
+
+	return standPat
+}
+
+func evaluatePositionWithDepth(myAgent *Agent, otherAgent *Agent, turnCount int, remainingDepth int, searchDepth int) int {
 	if !myAgent.Alive && !otherAgent.Alive {
 		return DRAW_SCORE
 	}
@@ -379,7 +699,7 @@ func evaluatePosition(myAgent *Agent, otherAgent *Agent, turnCount int) int {
 
 	score := 0
 
-	weights := getDynamicWeights(turnCount)
+	weights := getDynamicWeights(turnCount, searchDepth)
 
 	myTerritory, oppTerritory, control := calculateVoronoiControl(myAgent, otherAgent)
 	territoryDiff := myTerritory - oppTerritory
@@ -387,8 +707,9 @@ func evaluatePosition(myAgent *Agent, otherAgent *Agent, turnCount int) int {
 	myFreedom := len(myValidMoves)
 	opponentFreedom := len(opponentValidMoves)
 
-	myLocalSpace := countReachableSpace(myAgent, 15)
-	oppLocalSpace := countReachableSpace(otherAgent, 15)
+	adaptiveDepth := calculateAdaptiveDepth(15, remainingDepth)
+	myLocalSpace := countReachableSpace(myAgent, adaptiveDepth)
+	oppLocalSpace := countReachableSpace(otherAgent, adaptiveDepth)
 
 	boostDiff := myAgent.BoostsRemaining - otherAgent.BoostsRemaining
 
@@ -410,8 +731,9 @@ func evaluatePosition(myAgent *Agent, otherAgent *Agent, turnCount int) int {
 	oppCompactness := evaluateCompactness(otherAgent, control, 2)
 	score += (myCompactness - oppCompactness) * weights.compactness
 
-	myTrapPenalty := detectCorridorTraps(myAgent, otherAgent)
-	oppTrapPenalty := detectCorridorTraps(otherAgent, myAgent)
+	adaptiveTrapDepth := calculateAdaptiveDepth(3, remainingDepth)
+	myTrapPenalty := detectCorridorTrapsAdaptive(myAgent, otherAgent, adaptiveTrapDepth)
+	oppTrapPenalty := detectCorridorTrapsAdaptive(otherAgent, myAgent, adaptiveTrapDepth)
 	score += (oppTrapPenalty - myTrapPenalty)
 
 	headDistance := torusDistance(myHead, oppHead, myAgent.Board)
@@ -431,7 +753,185 @@ func evaluatePosition(myAgent *Agent, otherAgent *Agent, turnCount int) int {
 	chokeScore := evaluateChokePoints(myAgent, otherAgent, control)
 	score += chokeScore * weights.chokePoint
 
+	secondOrderVoronoi := calculateSecondOrderVoronoi(myAgent, otherAgent)
+	score += secondOrderVoronoi * weights.voronoiSecondOrder
+
+	potentialMobility := calculatePotentialMobility(myAgent, otherAgent)
+	score += potentialMobility * weights.potentialMobility
+
+	myTrailThreat := calculateTrailThreat(myAgent, otherAgent)
+	oppTrailThreat := calculateTrailThreat(otherAgent, myAgent)
+	score -= myTrailThreat * weights.trailThreat
+	score += oppTrailThreat * weights.trailThreat
+
+	influenceScore := calculateInfluence(myAgent, otherAgent)
+	score += influenceScore * weights.influence
+
+	myWallPenalty := calculateWallPenalty(myAgent)
+	oppWallPenalty := calculateWallPenalty(otherAgent)
+	score -= myWallPenalty * weights.wallPenalty
+	score += oppWallPenalty * weights.wallPenalty
+
+	myTerritoryDensity := calculateTerritoryDensity(myAgent, control, 1)
+	oppTerritoryDensity := calculateTerritoryDensity(otherAgent, control, 2)
+	score += (myTerritoryDensity - oppTerritoryDensity) * weights.territoryDensity
+
+	myEscapeRoutes := calculateEscapeRoutes(myAgent)
+	oppEscapeRoutes := calculateEscapeRoutes(otherAgent)
+	score += (myEscapeRoutes - oppEscapeRoutes) * weights.escapeRoutes
+
+	oppMobilityRestriction := calculateOpponentMobilityRestriction(myAgent, otherAgent)
+	score += oppMobilityRestriction * weights.opponentMobility
+
+	lookaheadControl := calculateLookaheadControl(myAgent, otherAgent)
+	score += lookaheadControl * weights.lookaheadControl
+
+	mySpaceEfficiency := calculateSpaceEfficiency(myAgent, otherAgent)
+	oppSpaceEfficiency := calculateSpaceEfficiency(otherAgent, myAgent)
+	score += (mySpaceEfficiency - oppSpaceEfficiency) * weights.spaceEfficiency
+
+	aggressiveCutoffScore := calculateAggressiveCutoff(myAgent, otherAgent)
+	score += aggressiveCutoffScore * weights.aggressiveCutoff
+
+	defensiveSpacing := calculateDefensiveSpacing(myAgent, otherAgent)
+	score += defensiveSpacing * weights.defensiveSpacing
+
+	myCenterControl := calculateCenterControl(myAgent)
+	oppCenterControl := calculateCenterControl(otherAgent)
+	score += (myCenterControl - oppCenterControl) * weights.centerControl
+
+	futureTerritory := calculateFutureTerritory(myAgent, otherAgent)
+	score += futureTerritory * weights.futureTerritory
+
+	myMobilityProjection := calculateMobilityProjection(myAgent, otherAgent)
+	oppMobilityProjection := calculateMobilityProjection(otherAgent, myAgent)
+	score += (myMobilityProjection - oppMobilityProjection) * weights.mobilityProjection
+
 	return score
+}
+
+func evaluatePosition(myAgent *Agent, otherAgent *Agent, turnCount int) int {
+	return evaluatePositionWithDepth(myAgent, otherAgent, turnCount, 0, 1)
+}
+
+func calculateAdaptiveDepth(maxDepth int, remainingDepth int) int {
+	adaptiveDepth := int(float64(remainingDepth)*ADAPTIVE_DEPTH_MULTIPLIER) + ADAPTIVE_DEPTH_BASE
+	if adaptiveDepth > maxDepth {
+		return maxDepth
+	}
+	if adaptiveDepth < 1 {
+		return 1
+	}
+	return adaptiveDepth
+}
+
+func detectCorridorTrapsAdaptive(agent *Agent, opponent *Agent, simDepth int) int {
+	if !agent.Alive {
+		return 0
+	}
+
+	currentMoves := agent.GetValidMoves()
+	if len(currentMoves) >= 3 {
+		return 0
+	}
+
+	if len(currentMoves) == 0 {
+		return PENALTY_CORRIDOR_BASE * 10
+	}
+
+	if simDepth <= 0 {
+		simDepth = 3
+	}
+
+	penalty := 0
+	testBoard := agent.Board.Clone()
+	testAgent := agent.Clone(testBoard)
+	testOpponent := opponent.Clone(testBoard)
+
+	minFutureMobility := 4
+	validMovesAtDepth := []int{}
+
+	for _, move1 := range currentMoves {
+		b1 := testBoard.Clone()
+		a1 := testAgent.Clone(b1)
+		o1 := testOpponent.Clone(b1)
+
+		success := a1.Move(move1, o1, false)
+		if !success || !a1.Alive {
+			continue
+		}
+
+		moves1 := a1.GetValidMoves()
+		validMovesAtDepth = append(validMovesAtDepth, len(moves1))
+		if len(moves1) < minFutureMobility {
+			minFutureMobility = len(moves1)
+		}
+
+		if len(moves1) == 0 || simDepth <= 1 {
+			continue
+		}
+
+		maxMovesToCheck := 2
+		if len(moves1) < maxMovesToCheck {
+			maxMovesToCheck = len(moves1)
+		}
+
+		for i := 0; i < maxMovesToCheck && i < len(moves1); i++ {
+			move2 := moves1[i]
+			b2 := b1.Clone()
+			a2 := a1.Clone(b2)
+			o2 := o1.Clone(b2)
+
+			success := a2.Move(move2, o2, false)
+			if !success || !a2.Alive {
+				continue
+			}
+
+			moves2 := a2.GetValidMoves()
+			validMovesAtDepth = append(validMovesAtDepth, len(moves2))
+			if len(moves2) < minFutureMobility {
+				minFutureMobility = len(moves2)
+			}
+
+			if len(moves2) == 0 || simDepth <= 2 {
+				continue
+			}
+
+			if len(moves2) > 0 {
+				b3 := b2.Clone()
+				a3 := a2.Clone(b3)
+				o3 := o2.Clone(b3)
+
+				success := a3.Move(moves2[0], o3, false)
+				if success && a3.Alive {
+					moves3 := a3.GetValidMoves()
+					validMovesAtDepth = append(validMovesAtDepth, len(moves3))
+					if len(moves3) < minFutureMobility {
+						minFutureMobility = len(moves3)
+					}
+				}
+			}
+		}
+	}
+
+	avgFutureMobility := 0
+	if len(validMovesAtDepth) > 0 {
+		sum := 0
+		for _, m := range validMovesAtDepth {
+			sum += m
+		}
+		avgFutureMobility = sum / len(validMovesAtDepth)
+	}
+
+	if minFutureMobility <= 1 {
+		penalty += PENALTY_CORRIDOR_BASE * 6
+	} else if minFutureMobility == 2 && avgFutureMobility*2 < 5 {
+		penalty += PENALTY_CORRIDOR_BASE * 3
+	} else if avgFutureMobility*10 < 20 {
+		penalty += PENALTY_CORRIDOR_BASE
+	}
+
+	return penalty
 }
 
 // detectCorridorTraps simulates future moves to detect if agent is in a narrow corridor with no escape
@@ -1132,25 +1632,53 @@ func abs(x int) int {
 }
 
 type WeightSet struct {
-	territory   int
-	freedom     int
-	reachable   int
-	boost       int
-	chamber     int
-	edge        int
-	compactness int
-	cutoff      int
-	growth      int
-	chokePoint  int
+	territory          int
+	freedom            int
+	reachable          int
+	boost              int
+	chamber            int
+	edge               int
+	compactness        int
+	cutoff             int
+	growth             int
+	chokePoint         int
+	voronoiSecondOrder int
+	potentialMobility  int
+	trailThreat        int
+	influence          int
+	wallPenalty        int
+	territoryDensity   int
+	escapeRoutes       int
+	opponentMobility   int
+	lookaheadControl   int
+	spaceEfficiency    int
+	aggressiveCutoff   int
+	defensiveSpacing   int
+	centerControl      int
+	futureTerritory    int
+	mobilityProjection int
 }
 
-func getDynamicWeights(turnCount int) WeightSet {
+func getDynamicWeights(turnCount int, searchDepth int) WeightSet {
 	weights := WeightSet{}
 
+	depthMultiplierTactical := 1.0
+	depthMultiplierStrategic := 1.0
+
+	if searchDepth < 5 {
+		depthMultiplierTactical = 1.5
+		depthMultiplierStrategic = 0.7
+	} else if searchDepth > 8 {
+		depthMultiplierTactical = 0.8
+		depthMultiplierStrategic = 1.3
+	}
+
+	boostThreshold := int(float64(20) * (float64(WEIGHT_TERRITORY) / 200.0))
+
 	if turnCount < 50 {
-		weights.territory = WEIGHT_TERRITORY / 2
-		weights.freedom = WEIGHT_FREEDOM * 2
-		weights.reachable = WEIGHT_REACHABLE * 2
+		weights.territory = int(float64(WEIGHT_TERRITORY/2) * depthMultiplierStrategic)
+		weights.freedom = int(float64(WEIGHT_FREEDOM*2) * depthMultiplierTactical)
+		weights.reachable = int(float64(WEIGHT_REACHABLE*2) * depthMultiplierTactical)
 		weights.boost = WEIGHT_BOOST
 		weights.chamber = WEIGHT_CHAMBER
 		weights.edge = WEIGHT_EDGE / 2
@@ -1158,10 +1686,25 @@ func getDynamicWeights(turnCount int) WeightSet {
 		weights.cutoff = WEIGHT_CUTOFF / 2
 		weights.growth = WEIGHT_GROWTH * 2
 		weights.chokePoint = 20
+		weights.voronoiSecondOrder = WEIGHT_VORONOI_SECOND_ORDER / 2
+		weights.potentialMobility = int(float64(WEIGHT_POTENTIAL_MOBILITY) * EARLY_GAME_EXPANSION)
+		weights.trailThreat = WEIGHT_TRAIL_THREAT / 2
+		weights.influence = WEIGHT_INFLUENCE * 2
+		weights.wallPenalty = WEIGHT_WALL_PENALTY
+		weights.territoryDensity = WEIGHT_TERRITORY_DENSITY / 2
+		weights.escapeRoutes = int(float64(WEIGHT_ESCAPE_ROUTES) * EARLY_GAME_EXPANSION)
+		weights.opponentMobility = WEIGHT_OPPONENT_MOBILITY
+		weights.lookaheadControl = WEIGHT_LOOKAHEAD_CONTROL * 2
+		weights.spaceEfficiency = WEIGHT_SPACE_EFFICIENCY / 2
+		weights.aggressiveCutoff = WEIGHT_AGGRESSIVE_CUTOFF / 2
+		weights.defensiveSpacing = WEIGHT_DEFENSIVE_SPACING * 2
+		weights.centerControl = WEIGHT_CENTER_CONTROL * 2
+		weights.futureTerritory = WEIGHT_FUTURE_TERRITORY * 2
+		weights.mobilityProjection = int(float64(WEIGHT_MOBILITY_PROJECTION) * EARLY_GAME_EXPANSION)
 	} else if turnCount < 150 {
-		weights.territory = WEIGHT_TERRITORY
-		weights.freedom = WEIGHT_FREEDOM
-		weights.reachable = WEIGHT_REACHABLE
+		weights.territory = int(float64(WEIGHT_TERRITORY) * depthMultiplierStrategic)
+		weights.freedom = int(float64(WEIGHT_FREEDOM) * depthMultiplierTactical)
+		weights.reachable = int(float64(WEIGHT_REACHABLE) * depthMultiplierTactical)
 		weights.boost = WEIGHT_BOOST
 		weights.chamber = WEIGHT_CHAMBER
 		weights.edge = WEIGHT_EDGE
@@ -1169,10 +1712,25 @@ func getDynamicWeights(turnCount int) WeightSet {
 		weights.cutoff = WEIGHT_CUTOFF
 		weights.growth = WEIGHT_GROWTH
 		weights.chokePoint = 40
+		weights.voronoiSecondOrder = WEIGHT_VORONOI_SECOND_ORDER
+		weights.potentialMobility = WEIGHT_POTENTIAL_MOBILITY
+		weights.trailThreat = WEIGHT_TRAIL_THREAT
+		weights.influence = WEIGHT_INFLUENCE
+		weights.wallPenalty = WEIGHT_WALL_PENALTY
+		weights.territoryDensity = WEIGHT_TERRITORY_DENSITY
+		weights.escapeRoutes = WEIGHT_ESCAPE_ROUTES
+		weights.opponentMobility = WEIGHT_OPPONENT_MOBILITY
+		weights.lookaheadControl = WEIGHT_LOOKAHEAD_CONTROL
+		weights.spaceEfficiency = WEIGHT_SPACE_EFFICIENCY
+		weights.aggressiveCutoff = WEIGHT_AGGRESSIVE_CUTOFF
+		weights.defensiveSpacing = WEIGHT_DEFENSIVE_SPACING
+		weights.centerControl = WEIGHT_CENTER_CONTROL
+		weights.futureTerritory = WEIGHT_FUTURE_TERRITORY
+		weights.mobilityProjection = WEIGHT_MOBILITY_PROJECTION
 	} else {
-		weights.territory = WEIGHT_TERRITORY * 2
-		weights.freedom = WEIGHT_FREEDOM / 2
-		weights.reachable = WEIGHT_REACHABLE / 2
+		weights.territory = int(float64(WEIGHT_TERRITORY) * LATE_GAME_TERRITORY * 2 * depthMultiplierStrategic)
+		weights.freedom = int(float64(WEIGHT_FREEDOM/2) * depthMultiplierTactical)
+		weights.reachable = int(float64(WEIGHT_REACHABLE/2) * depthMultiplierTactical)
 		weights.boost = WEIGHT_BOOST
 		weights.chamber = WEIGHT_CHAMBER * 2
 		weights.edge = WEIGHT_EDGE * 2
@@ -1180,6 +1738,21 @@ func getDynamicWeights(turnCount int) WeightSet {
 		weights.cutoff = WEIGHT_CUTOFF * 2
 		weights.growth = WEIGHT_GROWTH / 2
 		weights.chokePoint = 60
+		weights.voronoiSecondOrder = int(float64(WEIGHT_VORONOI_SECOND_ORDER) * LATE_GAME_TERRITORY)
+		weights.potentialMobility = WEIGHT_POTENTIAL_MOBILITY / 2
+		weights.trailThreat = int(float64(WEIGHT_TRAIL_THREAT) * ENDGAME_SURVIVAL)
+		weights.influence = WEIGHT_INFLUENCE / 2
+		weights.wallPenalty = int(float64(WEIGHT_WALL_PENALTY) * ENDGAME_SURVIVAL)
+		weights.territoryDensity = int(float64(WEIGHT_TERRITORY_DENSITY) * LATE_GAME_TERRITORY)
+		weights.escapeRoutes = int(float64(WEIGHT_ESCAPE_ROUTES) * ENDGAME_SURVIVAL)
+		weights.opponentMobility = int(float64(WEIGHT_OPPONENT_MOBILITY) * LATE_GAME_TERRITORY)
+		weights.lookaheadControl = WEIGHT_LOOKAHEAD_CONTROL / 2
+		weights.spaceEfficiency = int(float64(WEIGHT_SPACE_EFFICIENCY) * LATE_GAME_TERRITORY)
+		weights.aggressiveCutoff = int(float64(WEIGHT_AGGRESSIVE_CUTOFF) * LATE_GAME_TERRITORY)
+		weights.defensiveSpacing = WEIGHT_DEFENSIVE_SPACING / 2
+		weights.centerControl = WEIGHT_CENTER_CONTROL / 2
+		weights.futureTerritory = WEIGHT_FUTURE_TERRITORY / 2
+		weights.mobilityProjection = WEIGHT_MOBILITY_PROJECTION / 2
 	}
 
 	return weights
@@ -1288,4 +1861,603 @@ func directionToString(dir Direction) string {
 	default:
 		return "RIGHT"
 	}
+}
+
+func calculateSecondOrderVoronoi(myAgent *Agent, otherAgent *Agent) int {
+	if !myAgent.Alive || !otherAgent.Alive {
+		return 0
+	}
+
+	_, _, control := calculateVoronoiControl(myAgent, otherAgent)
+
+	mySecondOrder := 0
+	oppSecondOrder := 0
+
+	for y := 0; y < myAgent.Board.Height; y++ {
+		for x := 0; x < myAgent.Board.Width; x++ {
+			pos := Position{X: x, Y: y}
+
+			if control[y][x] == 1 {
+				for _, dir := range AllDirections {
+					next := Position{X: pos.X + dir.DX, Y: pos.Y + dir.DY}
+					next = myAgent.Board.TorusCheck(next)
+
+					if control[next.Y][next.X] == 2 {
+						myHead := myAgent.GetHead()
+						oppHead := otherAgent.GetHead()
+
+						myDist := torusDistance(myHead, next, myAgent.Board)
+						oppDist := torusDistance(oppHead, next, otherAgent.Board)
+
+						if myDist < oppDist-1 {
+							mySecondOrder++
+						}
+					}
+				}
+			} else if control[y][x] == 2 {
+				for _, dir := range AllDirections {
+					next := Position{X: pos.X + dir.DX, Y: pos.Y + dir.DY}
+					next = myAgent.Board.TorusCheck(next)
+
+					if control[next.Y][next.X] == 1 {
+						myHead := myAgent.GetHead()
+						oppHead := otherAgent.GetHead()
+
+						myDist := torusDistance(myHead, next, myAgent.Board)
+						oppDist := torusDistance(oppHead, next, otherAgent.Board)
+
+						if oppDist < myDist-1 {
+							oppSecondOrder++
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return mySecondOrder - oppSecondOrder
+}
+
+func calculatePotentialMobility(myAgent *Agent, otherAgent *Agent) int {
+	if !myAgent.Alive || !otherAgent.Alive {
+		return 0
+	}
+
+	myMoves := myAgent.GetValidMoves()
+	oppMoves := otherAgent.GetValidMoves()
+
+	myPotential := 0
+	for _, move := range myMoves {
+		testBoard := myAgent.Board.Clone()
+		testAgent := myAgent.Clone(testBoard)
+		testOpp := otherAgent.Clone(testBoard)
+
+		success := testAgent.Move(move, testOpp, false)
+		if success && testAgent.Alive {
+			myPotential += len(testAgent.GetValidMoves())
+		}
+	}
+
+	oppPotential := 0
+	for _, move := range oppMoves {
+		testBoard := otherAgent.Board.Clone()
+		testOpp := otherAgent.Clone(testBoard)
+		testAgent := myAgent.Clone(testBoard)
+
+		success := testOpp.Move(move, testAgent, false)
+		if success && testOpp.Alive {
+			oppPotential += len(testOpp.GetValidMoves())
+		}
+	}
+
+	return myPotential - oppPotential
+}
+
+func calculateTrailThreat(myAgent *Agent, otherAgent *Agent) int {
+	if !myAgent.Alive || !otherAgent.Alive {
+		return 0
+	}
+
+	myHead := myAgent.GetHead()
+	oppTrail := otherAgent.Trail
+
+	threat := 0
+	lookback := 15
+	if len(oppTrail) < lookback {
+		lookback = len(oppTrail)
+	}
+
+	for i := len(oppTrail) - 1; i >= len(oppTrail)-lookback && i >= 0; i-- {
+		trailPos := oppTrail[i]
+		dist := torusDistance(myHead, trailPos, myAgent.Board)
+
+		if dist == 0 {
+			continue
+		}
+
+		threat += 100 / (dist + 1)
+	}
+
+	return threat
+}
+
+func calculateInfluence(myAgent *Agent, otherAgent *Agent) int {
+	if !myAgent.Alive || !otherAgent.Alive {
+		return 0
+	}
+
+	centralityMap := make([][]int, myAgent.Board.Height)
+	for y := 0; y < myAgent.Board.Height; y++ {
+		centralityMap[y] = make([]int, myAgent.Board.Width)
+		for x := 0; x < myAgent.Board.Width; x++ {
+			centerX := myAgent.Board.Width / 2
+			centerY := myAgent.Board.Height / 2
+
+			dx := abs(x - centerX)
+			dy := abs(y - centerY)
+
+			if dx > myAgent.Board.Width/2 {
+				dx = myAgent.Board.Width - dx
+			}
+			if dy > myAgent.Board.Height/2 {
+				dy = myAgent.Board.Height - dy
+			}
+
+			centralityMap[y][x] = 100 - (dx+dy)*5
+			if centralityMap[y][x] < 0 {
+				centralityMap[y][x] = 0
+			}
+		}
+	}
+
+	myInfluence := 0
+	myHead := myAgent.GetHead()
+	visited := make(map[Position]bool)
+	queue := []Position{myHead}
+	visited[myHead] = true
+	depth := 0
+	maxDepth := 7
+
+	for len(queue) > 0 && depth < maxDepth {
+		levelSize := len(queue)
+		for i := 0; i < levelSize; i++ {
+			current := queue[0]
+			queue = queue[1:]
+
+			myInfluence += centralityMap[current.Y][current.X]
+
+			for _, dir := range AllDirections {
+				next := Position{X: current.X + dir.DX, Y: current.Y + dir.DY}
+				next = myAgent.Board.TorusCheck(next)
+
+				if !visited[next] && myAgent.Board.GetCellState(next) == EMPTY {
+					visited[next] = true
+					queue = append(queue, next)
+				}
+			}
+		}
+		depth++
+	}
+
+	oppInfluence := 0
+	oppHead := otherAgent.GetHead()
+	visited = make(map[Position]bool)
+	queue = []Position{oppHead}
+	visited[oppHead] = true
+	depth = 0
+
+	for len(queue) > 0 && depth < maxDepth {
+		levelSize := len(queue)
+		for i := 0; i < levelSize; i++ {
+			current := queue[0]
+			queue = queue[1:]
+
+			oppInfluence += centralityMap[current.Y][current.X]
+
+			for _, dir := range AllDirections {
+				next := Position{X: current.X + dir.DX, Y: current.Y + dir.DY}
+				next = otherAgent.Board.TorusCheck(next)
+
+				if !visited[next] && otherAgent.Board.GetCellState(next) == EMPTY {
+					visited[next] = true
+					queue = append(queue, next)
+				}
+			}
+		}
+		depth++
+	}
+
+	return myInfluence - oppInfluence
+}
+
+func calculateWallPenalty(agent *Agent) int {
+	if !agent.Alive {
+		return 0
+	}
+
+	head := agent.GetHead()
+	penalty := 0
+
+	for _, dir := range AllDirections {
+		next := Position{X: head.X + dir.DX, Y: head.Y + dir.DY}
+		next = agent.Board.TorusCheck(next)
+
+		if agent.Board.GetCellState(next) != EMPTY {
+			penalty += 50
+		}
+	}
+
+	return penalty
+}
+
+func calculateTerritoryDensity(agent *Agent, control [][]int, playerID int) int {
+	if !agent.Alive {
+		return 0
+	}
+
+	head := agent.GetHead()
+	visited := make(map[Position]bool)
+	queue := []Position{head}
+	visited[head] = true
+
+	controlledCells := 0
+	totalCells := 0
+	maxDepth := 10
+	depth := 0
+
+	for len(queue) > 0 && depth < maxDepth {
+		levelSize := len(queue)
+		for i := 0; i < levelSize; i++ {
+			current := queue[0]
+			queue = queue[1:]
+			totalCells++
+
+			if control[current.Y][current.X] == playerID {
+				controlledCells++
+			}
+
+			for _, dir := range AllDirections {
+				next := Position{X: current.X + dir.DX, Y: current.Y + dir.DY}
+				next = agent.Board.TorusCheck(next)
+
+				if !visited[next] && agent.Board.GetCellState(next) == EMPTY {
+					visited[next] = true
+					queue = append(queue, next)
+				}
+			}
+		}
+		depth++
+	}
+
+	if totalCells == 0 {
+		return 0
+	}
+
+	return (controlledCells * 100) / totalCells
+}
+
+func calculateEscapeRoutes(agent *Agent) int {
+	if !agent.Alive {
+		return 0
+	}
+
+	escapeRoutes := 0
+
+	for _, move := range agent.GetValidMoves() {
+		testBoard := agent.Board.Clone()
+		testAgent := agent.Clone(testBoard)
+
+		success := testAgent.Move(move, testAgent, false)
+		if !success || !testAgent.Alive {
+			continue
+		}
+
+		visited := make(map[Position]bool)
+		queue := []Position{testAgent.GetHead()}
+		visited[queue[0]] = true
+		reachable := 0
+		maxReach := 20
+
+		for len(queue) > 0 && reachable < maxReach {
+			current := queue[0]
+			queue = queue[1:]
+			reachable++
+
+			for _, dir := range AllDirections {
+				next := Position{X: current.X + dir.DX, Y: current.Y + dir.DY}
+				next = testAgent.Board.TorusCheck(next)
+
+				if !visited[next] && testAgent.Board.GetCellState(next) == EMPTY {
+					visited[next] = true
+					queue = append(queue, next)
+				}
+			}
+		}
+
+		if reachable >= 15 {
+			escapeRoutes++
+		}
+	}
+
+	return escapeRoutes
+}
+
+func calculateOpponentMobilityRestriction(myAgent *Agent, otherAgent *Agent) int {
+	if !myAgent.Alive || !otherAgent.Alive {
+		return 0
+	}
+
+	oppHead := otherAgent.GetHead()
+	restrictionScore := 0
+
+	for _, dir := range AllDirections {
+		next := Position{X: oppHead.X + dir.DX, Y: oppHead.Y + dir.DY}
+		next = otherAgent.Board.TorusCheck(next)
+
+		if myAgent.ContainsPosition(next) {
+			restrictionScore += 30
+		} else if otherAgent.Board.GetCellState(next) != EMPTY {
+			restrictionScore += 10
+		}
+	}
+
+	myHead := myAgent.GetHead()
+	dist := torusDistance(myHead, oppHead, myAgent.Board)
+
+	if dist <= 3 {
+		restrictionScore += (4 - dist) * 20
+	}
+
+	return restrictionScore
+}
+
+func calculateLookaheadControl(myAgent *Agent, otherAgent *Agent) int {
+	if !myAgent.Alive || !otherAgent.Alive {
+		return 0
+	}
+
+	myMoves := myAgent.GetValidMoves()
+	if len(myMoves) == 0 {
+		return -1000
+	}
+
+	bestControl := -999999
+
+	for _, move := range myMoves {
+		testBoard := myAgent.Board.Clone()
+		testMe := myAgent.Clone(testBoard)
+		testOpp := otherAgent.Clone(testBoard)
+
+		success := testMe.Move(move, testOpp, false)
+		if !success || !testMe.Alive {
+			continue
+		}
+
+		myT, oppT, _ := calculateVoronoiControl(testMe, testOpp)
+		control := myT - oppT
+
+		if control > bestControl {
+			bestControl = control
+		}
+	}
+
+	return bestControl
+}
+
+func calculateSpaceEfficiency(agent *Agent, otherAgent *Agent) int {
+	if !agent.Alive {
+		return 0
+	}
+
+	head := agent.GetHead()
+
+	visited := make(map[Position]bool)
+	queue := []Position{head}
+	visited[head] = true
+
+	emptySpaces := 0
+	trailSpaces := 0
+	maxDepth := 12
+	depth := 0
+
+	for len(queue) > 0 && depth < maxDepth {
+		levelSize := len(queue)
+		for i := 0; i < levelSize; i++ {
+			current := queue[0]
+			queue = queue[1:]
+
+			for _, dir := range AllDirections {
+				next := Position{X: current.X + dir.DX, Y: current.Y + dir.DY}
+				next = agent.Board.TorusCheck(next)
+
+				if !visited[next] {
+					visited[next] = true
+
+					if agent.Board.GetCellState(next) == EMPTY {
+						emptySpaces++
+						queue = append(queue, next)
+					} else if agent.ContainsPosition(next) {
+						trailSpaces++
+					}
+				}
+			}
+		}
+		depth++
+	}
+
+	total := emptySpaces + trailSpaces
+	if total == 0 {
+		return 0
+	}
+
+	return (trailSpaces * 100) / total
+}
+
+func calculateAggressiveCutoff(myAgent *Agent, otherAgent *Agent) int {
+	if !myAgent.Alive || !otherAgent.Alive {
+		return 0
+	}
+
+	myHead := myAgent.GetHead()
+	oppHead := otherAgent.GetHead()
+
+	dist := torusDistance(myHead, oppHead, myAgent.Board)
+
+	if dist > 8 {
+		return 0
+	}
+
+	oppReachable := countReachableSpace(otherAgent, 20)
+
+	cutoffScore := 0
+	if oppReachable < 30 {
+		cutoffScore += (30 - oppReachable) * 5
+	}
+
+	myReachable := countReachableSpace(myAgent, 20)
+	if float64(myReachable) > float64(oppReachable)*1.3 {
+		cutoffScore += 50
+	}
+
+	for _, dir := range AllDirections {
+		next := Position{X: oppHead.X + dir.DX, Y: oppHead.Y + dir.DY}
+		next = otherAgent.Board.TorusCheck(next)
+
+		myDist := torusDistance(myHead, next, myAgent.Board)
+		oppDist := 1
+
+		if myDist < oppDist {
+			cutoffScore += 20
+		}
+	}
+
+	return cutoffScore
+}
+
+func calculateDefensiveSpacing(myAgent *Agent, otherAgent *Agent) int {
+	if !myAgent.Alive || !otherAgent.Alive {
+		return 0
+	}
+
+	myHead := myAgent.GetHead()
+	oppHead := otherAgent.GetHead()
+
+	dist := torusDistance(myHead, oppHead, myAgent.Board)
+
+	optimalDist := 8
+	spacing := -abs(dist-optimalDist) * 10
+
+	if dist <= 2 {
+		spacing -= 100
+	} else if dist <= 4 {
+		spacing -= 50
+	}
+
+	return spacing
+}
+
+func calculateCenterControl(agent *Agent) int {
+	if !agent.Alive {
+		return 0
+	}
+
+	head := agent.GetHead()
+	centerX := agent.Board.Width / 2
+	centerY := agent.Board.Height / 2
+
+	dx := abs(head.X - centerX)
+	dy := abs(head.Y - centerY)
+
+	if dx > agent.Board.Width/2 {
+		dx = agent.Board.Width - dx
+	}
+	if dy > agent.Board.Height/2 {
+		dy = agent.Board.Height - dy
+	}
+
+	centerDist := dx + dy
+
+	return 100 - centerDist*5
+}
+
+func calculateFutureTerritory(myAgent *Agent, otherAgent *Agent) int {
+	if !myAgent.Alive || !otherAgent.Alive {
+		return 0
+	}
+
+	myMoves := myAgent.GetValidMoves()
+	if len(myMoves) == 0 {
+		return -1000
+	}
+
+	totalFuture := 0
+	count := 0
+
+	for _, move := range myMoves {
+		testBoard := myAgent.Board.Clone()
+		testMe := myAgent.Clone(testBoard)
+		testOpp := otherAgent.Clone(testBoard)
+
+		success := testMe.Move(move, testOpp, false)
+		if !success || !testMe.Alive {
+			continue
+		}
+
+		myT, oppT := calculateVoronoiTerritory(testMe, testOpp)
+		totalFuture += (myT - oppT)
+		count++
+	}
+
+	if count == 0 {
+		return -1000
+	}
+
+	return totalFuture / count
+}
+
+func calculateMobilityProjection(agent *Agent, opponent *Agent) int {
+	if !agent.Alive {
+		return 0
+	}
+
+	moves := agent.GetValidMoves()
+	if len(moves) == 0 {
+		return 0
+	}
+
+	totalMobility := 0
+	futureDepth := 3
+
+	for _, move := range moves {
+		testBoard := agent.Board.Clone()
+		testAgent := agent.Clone(testBoard)
+		testOpp := opponent.Clone(testBoard)
+
+		success := testAgent.Move(move, testOpp, false)
+		if !success || !testAgent.Alive {
+			continue
+		}
+
+		mobilitySum := len(testAgent.GetValidMoves())
+
+		for d := 1; d < futureDepth; d++ {
+			nextMoves := testAgent.GetValidMoves()
+			if len(nextMoves) == 0 {
+				break
+			}
+
+			testBoard2 := testAgent.Board.Clone()
+			testAgent2 := testAgent.Clone(testBoard2)
+			testOpp2 := testOpp.Clone(testBoard2)
+
+			success := testAgent2.Move(nextMoves[0], testOpp2, false)
+			if success && testAgent2.Alive {
+				mobilitySum += len(testAgent2.GetValidMoves())
+			}
+		}
+
+		totalMobility += mobilitySum
+	}
+
+	return totalMobility
 }

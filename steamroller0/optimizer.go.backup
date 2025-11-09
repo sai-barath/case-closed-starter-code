@@ -8,17 +8,32 @@ import (
 )
 
 type WeightConfig struct {
-	WEIGHT_TERRITORY      int
-	WEIGHT_FREEDOM        int
-	WEIGHT_REACHABLE      int
-	WEIGHT_BOOST          int
-	WEIGHT_CHAMBER        int
-	WEIGHT_EDGE           int
-	WEIGHT_COMPACTNESS    int
-	WEIGHT_CUTOFF         int
-	WEIGHT_GROWTH         int
-	PENALTY_CORRIDOR_BASE int
-	PENALTY_HEAD_DISTANCE int
+	WEIGHT_TERRITORY            int
+	WEIGHT_FREEDOM              int
+	WEIGHT_REACHABLE            int
+	WEIGHT_BOOST                int
+	WEIGHT_CHAMBER              int
+	WEIGHT_EDGE                 int
+	WEIGHT_COMPACTNESS          int
+	WEIGHT_CUTOFF               int
+	WEIGHT_GROWTH               int
+	PENALTY_CORRIDOR_BASE       int
+	PENALTY_HEAD_DISTANCE       int
+	WEIGHT_VORONOI_SECOND_ORDER int
+	WEIGHT_POTENTIAL_MOBILITY   int
+	WEIGHT_TRAIL_THREAT         int
+	WEIGHT_INFLUENCE            int
+	WEIGHT_WALL_PENALTY         int
+	WEIGHT_TERRITORY_DENSITY    int
+	WEIGHT_ESCAPE_ROUTES        int
+	WEIGHT_OPPONENT_MOBILITY    int
+	WEIGHT_LOOKAHEAD_CONTROL    int
+	WEIGHT_SPACE_EFFICIENCY     int
+	WEIGHT_AGGRESSIVE_CUTOFF    int
+	WEIGHT_DEFENSIVE_SPACING    int
+	WEIGHT_CENTER_CONTROL       int
+	WEIGHT_FUTURE_TERRITORY     int
+	WEIGHT_MOBILITY_PROJECTION  int
 }
 
 func (w WeightConfig) String() string {
@@ -218,7 +233,7 @@ func runGamesParallel(individuals []Individual, baseline WeightConfig, gamesPerI
 	resultCounts := make([]struct{ wins, losses, draws int }, len(individuals))
 	for res := range results {
 		completedGames++
-		if completedGames%10 == 0 || completedGames == totalGames {
+		if completedGames%20 == 0 || completedGames == totalGames {
 			fmt.Printf("  Progress: %d/%d games completed\r", completedGames, totalGames)
 		}
 

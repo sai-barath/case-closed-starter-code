@@ -8,31 +8,63 @@ import (
 )
 
 type WeightConfig struct {
-	WEIGHT_TERRITORY      int
-	WEIGHT_FREEDOM        int
-	WEIGHT_REACHABLE      int
-	WEIGHT_BOOST          int
-	WEIGHT_CHAMBER        int
-	WEIGHT_EDGE           int
-	WEIGHT_COMPACTNESS    int
-	WEIGHT_CUTOFF         int
-	WEIGHT_GROWTH         int
-	PENALTY_CORRIDOR_BASE int
-	PENALTY_HEAD_DISTANCE int
+	WEIGHT_TERRITORY            int
+	WEIGHT_FREEDOM              int
+	WEIGHT_REACHABLE            int
+	WEIGHT_BOOST                int
+	WEIGHT_CHAMBER              int
+	WEIGHT_EDGE                 int
+	WEIGHT_COMPACTNESS          int
+	WEIGHT_CUTOFF               int
+	WEIGHT_GROWTH               int
+	PENALTY_CORRIDOR_BASE       int
+	PENALTY_HEAD_DISTANCE       int
+	WEIGHT_VORONOI_SECOND_ORDER int
+	WEIGHT_POTENTIAL_MOBILITY   int
+	WEIGHT_TRAIL_THREAT         int
+	WEIGHT_INFLUENCE            int
+	WEIGHT_WALL_PENALTY         int
+	WEIGHT_TERRITORY_DENSITY    int
+	WEIGHT_ESCAPE_ROUTES        int
+	WEIGHT_OPPONENT_MOBILITY    int
+	WEIGHT_LOOKAHEAD_CONTROL    int
+	WEIGHT_SPACE_EFFICIENCY     int
+	WEIGHT_AGGRESSIVE_CUTOFF    int
+	WEIGHT_DEFENSIVE_SPACING    int
+	WEIGHT_CENTER_CONTROL       int
+	WEIGHT_FUTURE_TERRITORY     int
+	WEIGHT_MOBILITY_PROJECTION  int
+	WEIGHT_CHOKE_POINT          int
 }
 
 func (w WeightConfig) String() string {
-	return fmt.Sprintf(`WEIGHT_TERRITORY      = %d
-WEIGHT_FREEDOM        = %d
-WEIGHT_REACHABLE      = %d
-WEIGHT_BOOST          = %d
-WEIGHT_CHAMBER        = %d
-WEIGHT_EDGE           = %d
-WEIGHT_COMPACTNESS    = %d
-WEIGHT_CUTOFF         = %d
-WEIGHT_GROWTH         = %d
-PENALTY_CORRIDOR_BASE = %d
-PENALTY_HEAD_DISTANCE = %d`,
+	return fmt.Sprintf(`WEIGHT_TERRITORY            = %d
+WEIGHT_FREEDOM              = %d
+WEIGHT_REACHABLE            = %d
+WEIGHT_BOOST                = %d
+WEIGHT_CHAMBER              = %d
+WEIGHT_EDGE                 = %d
+WEIGHT_COMPACTNESS          = %d
+WEIGHT_CUTOFF               = %d
+WEIGHT_GROWTH               = %d
+PENALTY_CORRIDOR_BASE       = %d
+PENALTY_HEAD_DISTANCE       = %d
+WEIGHT_VORONOI_SECOND_ORDER = %d
+WEIGHT_POTENTIAL_MOBILITY   = %d
+WEIGHT_TRAIL_THREAT         = %d
+WEIGHT_INFLUENCE            = %d
+WEIGHT_WALL_PENALTY         = %d
+WEIGHT_TERRITORY_DENSITY    = %d
+WEIGHT_ESCAPE_ROUTES        = %d
+WEIGHT_OPPONENT_MOBILITY    = %d
+WEIGHT_LOOKAHEAD_CONTROL    = %d
+WEIGHT_SPACE_EFFICIENCY     = %d
+WEIGHT_AGGRESSIVE_CUTOFF    = %d
+WEIGHT_DEFENSIVE_SPACING    = %d
+WEIGHT_CENTER_CONTROL       = %d
+WEIGHT_FUTURE_TERRITORY     = %d
+WEIGHT_MOBILITY_PROJECTION  = %d
+WEIGHT_CHOKE_POINT          = %d`,
 		w.WEIGHT_TERRITORY,
 		w.WEIGHT_FREEDOM,
 		w.WEIGHT_REACHABLE,
@@ -43,22 +75,54 @@ PENALTY_HEAD_DISTANCE = %d`,
 		w.WEIGHT_CUTOFF,
 		w.WEIGHT_GROWTH,
 		w.PENALTY_CORRIDOR_BASE,
-		w.PENALTY_HEAD_DISTANCE)
+		w.PENALTY_HEAD_DISTANCE,
+		w.WEIGHT_VORONOI_SECOND_ORDER,
+		w.WEIGHT_POTENTIAL_MOBILITY,
+		w.WEIGHT_TRAIL_THREAT,
+		w.WEIGHT_INFLUENCE,
+		w.WEIGHT_WALL_PENALTY,
+		w.WEIGHT_TERRITORY_DENSITY,
+		w.WEIGHT_ESCAPE_ROUTES,
+		w.WEIGHT_OPPONENT_MOBILITY,
+		w.WEIGHT_LOOKAHEAD_CONTROL,
+		w.WEIGHT_SPACE_EFFICIENCY,
+		w.WEIGHT_AGGRESSIVE_CUTOFF,
+		w.WEIGHT_DEFENSIVE_SPACING,
+		w.WEIGHT_CENTER_CONTROL,
+		w.WEIGHT_FUTURE_TERRITORY,
+		w.WEIGHT_MOBILITY_PROJECTION,
+		w.WEIGHT_CHOKE_POINT)
 }
 
 func randomWeights() WeightConfig {
 	return WeightConfig{
-		WEIGHT_TERRITORY:      rand.Intn(200),
-		WEIGHT_FREEDOM:        rand.Intn(200),
-		WEIGHT_REACHABLE:      rand.Intn(200),
-		WEIGHT_BOOST:          rand.Intn(50),
-		WEIGHT_CHAMBER:        rand.Intn(100),
-		WEIGHT_EDGE:           rand.Intn(50) - 25,
-		WEIGHT_COMPACTNESS:    rand.Intn(100) - 50,
-		WEIGHT_CUTOFF:         rand.Intn(100),
-		WEIGHT_GROWTH:         rand.Intn(100),
-		PENALTY_CORRIDOR_BASE: rand.Intn(1000) + 100,
-		PENALTY_HEAD_DISTANCE: rand.Intn(500) + 50,
+		WEIGHT_TERRITORY:            rand.Intn(200),
+		WEIGHT_FREEDOM:              rand.Intn(200),
+		WEIGHT_REACHABLE:            rand.Intn(200),
+		WEIGHT_BOOST:                rand.Intn(50),
+		WEIGHT_CHAMBER:              rand.Intn(100),
+		WEIGHT_EDGE:                 rand.Intn(50) - 25,
+		WEIGHT_COMPACTNESS:          rand.Intn(100) - 50,
+		WEIGHT_CUTOFF:               rand.Intn(100),
+		WEIGHT_GROWTH:               rand.Intn(100),
+		PENALTY_CORRIDOR_BASE:       rand.Intn(1000) + 100,
+		PENALTY_HEAD_DISTANCE:       rand.Intn(500) + 50,
+		WEIGHT_VORONOI_SECOND_ORDER: rand.Intn(150),
+		WEIGHT_POTENTIAL_MOBILITY:   rand.Intn(150),
+		WEIGHT_TRAIL_THREAT:         rand.Intn(200),
+		WEIGHT_INFLUENCE:            rand.Intn(100),
+		WEIGHT_WALL_PENALTY:         rand.Intn(300),
+		WEIGHT_TERRITORY_DENSITY:    rand.Intn(100),
+		WEIGHT_ESCAPE_ROUTES:        rand.Intn(250),
+		WEIGHT_OPPONENT_MOBILITY:    rand.Intn(150),
+		WEIGHT_LOOKAHEAD_CONTROL:    rand.Intn(150),
+		WEIGHT_SPACE_EFFICIENCY:     rand.Intn(100),
+		WEIGHT_AGGRESSIVE_CUTOFF:    rand.Intn(200),
+		WEIGHT_DEFENSIVE_SPACING:    rand.Intn(150),
+		WEIGHT_CENTER_CONTROL:       rand.Intn(100),
+		WEIGHT_FUTURE_TERRITORY:     rand.Intn(150),
+		WEIGHT_MOBILITY_PROJECTION:  rand.Intn(100),
+		WEIGHT_CHOKE_POINT:          rand.Intn(100),
 	}
 }
 
@@ -83,6 +147,22 @@ func setWeights(w WeightConfig) {
 	WEIGHT_GROWTH = w.WEIGHT_GROWTH
 	PENALTY_CORRIDOR_BASE = w.PENALTY_CORRIDOR_BASE
 	PENALTY_HEAD_DISTANCE = w.PENALTY_HEAD_DISTANCE
+	WEIGHT_VORONOI_SECOND_ORDER = w.WEIGHT_VORONOI_SECOND_ORDER
+	WEIGHT_POTENTIAL_MOBILITY = w.WEIGHT_POTENTIAL_MOBILITY
+	WEIGHT_TRAIL_THREAT = w.WEIGHT_TRAIL_THREAT
+	WEIGHT_INFLUENCE = w.WEIGHT_INFLUENCE
+	WEIGHT_WALL_PENALTY = w.WEIGHT_WALL_PENALTY
+	WEIGHT_TERRITORY_DENSITY = w.WEIGHT_TERRITORY_DENSITY
+	WEIGHT_ESCAPE_ROUTES = w.WEIGHT_ESCAPE_ROUTES
+	WEIGHT_OPPONENT_MOBILITY = w.WEIGHT_OPPONENT_MOBILITY
+	WEIGHT_LOOKAHEAD_CONTROL = w.WEIGHT_LOOKAHEAD_CONTROL
+	WEIGHT_SPACE_EFFICIENCY = w.WEIGHT_SPACE_EFFICIENCY
+	WEIGHT_AGGRESSIVE_CUTOFF = w.WEIGHT_AGGRESSIVE_CUTOFF
+	WEIGHT_DEFENSIVE_SPACING = w.WEIGHT_DEFENSIVE_SPACING
+	WEIGHT_CENTER_CONTROL = w.WEIGHT_CENTER_CONTROL
+	WEIGHT_FUTURE_TERRITORY = w.WEIGHT_FUTURE_TERRITORY
+	WEIGHT_MOBILITY_PROJECTION = w.WEIGHT_MOBILITY_PROJECTION
+	WEIGHT_CHOKE_POINT = w.WEIGHT_CHOKE_POINT
 }
 
 func runSingleGame(weights1, weights2 WeightConfig) GameResult {
@@ -258,17 +338,33 @@ func RunOptimizer(populationSize int, gamesPerIndividual int, workers int) {
 	}
 
 	baseline := WeightConfig{
-		WEIGHT_TERRITORY:      26,
-		WEIGHT_FREEDOM:        120,
-		WEIGHT_REACHABLE:      136,
-		WEIGHT_BOOST:          14,
-		WEIGHT_CHAMBER:        30,
-		WEIGHT_EDGE:           -10,
-		WEIGHT_COMPACTNESS:    -15,
-		WEIGHT_CUTOFF:         12,
-		WEIGHT_GROWTH:         30,
-		PENALTY_CORRIDOR_BASE: 500,
-		PENALTY_HEAD_DISTANCE: 200,
+		WEIGHT_TERRITORY:            140,
+		WEIGHT_FREEDOM:              105,
+		WEIGHT_REACHABLE:            110,
+		WEIGHT_BOOST:                19,
+		WEIGHT_CHAMBER:              9,
+		WEIGHT_EDGE:                 37,
+		WEIGHT_COMPACTNESS:          -18,
+		WEIGHT_CUTOFF:               2,
+		WEIGHT_GROWTH:               9,
+		PENALTY_CORRIDOR_BASE:       677,
+		PENALTY_HEAD_DISTANCE:       94,
+		WEIGHT_VORONOI_SECOND_ORDER: 80,
+		WEIGHT_POTENTIAL_MOBILITY:   90,
+		WEIGHT_TRAIL_THREAT:         120,
+		WEIGHT_INFLUENCE:            60,
+		WEIGHT_WALL_PENALTY:         200,
+		WEIGHT_TERRITORY_DENSITY:    40,
+		WEIGHT_ESCAPE_ROUTES:        150,
+		WEIGHT_OPPONENT_MOBILITY:    70,
+		WEIGHT_LOOKAHEAD_CONTROL:    85,
+		WEIGHT_SPACE_EFFICIENCY:     55,
+		WEIGHT_AGGRESSIVE_CUTOFF:    110,
+		WEIGHT_DEFENSIVE_SPACING:    75,
+		WEIGHT_CENTER_CONTROL:       45,
+		WEIGHT_FUTURE_TERRITORY:     95,
+		WEIGHT_MOBILITY_PROJECTION:  65,
+		WEIGHT_CHOKE_POINT:          50,
 	}
 
 	gen := 0
@@ -355,17 +451,33 @@ func RunOptimizer(populationSize int, gamesPerIndividual int, workers int) {
 			parent2 := sortedPop[rand.Intn(eliteSize)]
 
 			child := WeightConfig{
-				WEIGHT_TERRITORY:      mutate(crossover(parent1.Weights.WEIGHT_TERRITORY, parent2.Weights.WEIGHT_TERRITORY), 200),
-				WEIGHT_FREEDOM:        mutate(crossover(parent1.Weights.WEIGHT_FREEDOM, parent2.Weights.WEIGHT_FREEDOM), 200),
-				WEIGHT_REACHABLE:      mutate(crossover(parent1.Weights.WEIGHT_REACHABLE, parent2.Weights.WEIGHT_REACHABLE), 200),
-				WEIGHT_BOOST:          mutate(crossover(parent1.Weights.WEIGHT_BOOST, parent2.Weights.WEIGHT_BOOST), 50),
-				WEIGHT_CHAMBER:        mutate(crossover(parent1.Weights.WEIGHT_CHAMBER, parent2.Weights.WEIGHT_CHAMBER), 100),
-				WEIGHT_EDGE:           mutateSigned(crossover(parent1.Weights.WEIGHT_EDGE, parent2.Weights.WEIGHT_EDGE), 50, -25),
-				WEIGHT_COMPACTNESS:    mutateSigned(crossover(parent1.Weights.WEIGHT_COMPACTNESS, parent2.Weights.WEIGHT_COMPACTNESS), 100, -50),
-				WEIGHT_CUTOFF:         mutate(crossover(parent1.Weights.WEIGHT_CUTOFF, parent2.Weights.WEIGHT_CUTOFF), 100),
-				WEIGHT_GROWTH:         mutate(crossover(parent1.Weights.WEIGHT_GROWTH, parent2.Weights.WEIGHT_GROWTH), 100),
-				PENALTY_CORRIDOR_BASE: mutatePositive(crossover(parent1.Weights.PENALTY_CORRIDOR_BASE, parent2.Weights.PENALTY_CORRIDOR_BASE), 1000, 100),
-				PENALTY_HEAD_DISTANCE: mutatePositive(crossover(parent1.Weights.PENALTY_HEAD_DISTANCE, parent2.Weights.PENALTY_HEAD_DISTANCE), 500, 50),
+				WEIGHT_TERRITORY:            mutate(crossover(parent1.Weights.WEIGHT_TERRITORY, parent2.Weights.WEIGHT_TERRITORY), 200),
+				WEIGHT_FREEDOM:              mutate(crossover(parent1.Weights.WEIGHT_FREEDOM, parent2.Weights.WEIGHT_FREEDOM), 200),
+				WEIGHT_REACHABLE:            mutate(crossover(parent1.Weights.WEIGHT_REACHABLE, parent2.Weights.WEIGHT_REACHABLE), 200),
+				WEIGHT_BOOST:                mutate(crossover(parent1.Weights.WEIGHT_BOOST, parent2.Weights.WEIGHT_BOOST), 50),
+				WEIGHT_CHAMBER:              mutate(crossover(parent1.Weights.WEIGHT_CHAMBER, parent2.Weights.WEIGHT_CHAMBER), 100),
+				WEIGHT_EDGE:                 mutateSigned(crossover(parent1.Weights.WEIGHT_EDGE, parent2.Weights.WEIGHT_EDGE), 50, -25),
+				WEIGHT_COMPACTNESS:          mutateSigned(crossover(parent1.Weights.WEIGHT_COMPACTNESS, parent2.Weights.WEIGHT_COMPACTNESS), 100, -50),
+				WEIGHT_CUTOFF:               mutate(crossover(parent1.Weights.WEIGHT_CUTOFF, parent2.Weights.WEIGHT_CUTOFF), 100),
+				WEIGHT_GROWTH:               mutate(crossover(parent1.Weights.WEIGHT_GROWTH, parent2.Weights.WEIGHT_GROWTH), 100),
+				PENALTY_CORRIDOR_BASE:       mutatePositive(crossover(parent1.Weights.PENALTY_CORRIDOR_BASE, parent2.Weights.PENALTY_CORRIDOR_BASE), 1000, 100),
+				PENALTY_HEAD_DISTANCE:       mutatePositive(crossover(parent1.Weights.PENALTY_HEAD_DISTANCE, parent2.Weights.PENALTY_HEAD_DISTANCE), 500, 50),
+				WEIGHT_VORONOI_SECOND_ORDER: mutate(crossover(parent1.Weights.WEIGHT_VORONOI_SECOND_ORDER, parent2.Weights.WEIGHT_VORONOI_SECOND_ORDER), 150),
+				WEIGHT_POTENTIAL_MOBILITY:   mutate(crossover(parent1.Weights.WEIGHT_POTENTIAL_MOBILITY, parent2.Weights.WEIGHT_POTENTIAL_MOBILITY), 150),
+				WEIGHT_TRAIL_THREAT:         mutate(crossover(parent1.Weights.WEIGHT_TRAIL_THREAT, parent2.Weights.WEIGHT_TRAIL_THREAT), 200),
+				WEIGHT_INFLUENCE:            mutate(crossover(parent1.Weights.WEIGHT_INFLUENCE, parent2.Weights.WEIGHT_INFLUENCE), 100),
+				WEIGHT_WALL_PENALTY:         mutate(crossover(parent1.Weights.WEIGHT_WALL_PENALTY, parent2.Weights.WEIGHT_WALL_PENALTY), 300),
+				WEIGHT_TERRITORY_DENSITY:    mutate(crossover(parent1.Weights.WEIGHT_TERRITORY_DENSITY, parent2.Weights.WEIGHT_TERRITORY_DENSITY), 100),
+				WEIGHT_ESCAPE_ROUTES:        mutate(crossover(parent1.Weights.WEIGHT_ESCAPE_ROUTES, parent2.Weights.WEIGHT_ESCAPE_ROUTES), 250),
+				WEIGHT_OPPONENT_MOBILITY:    mutate(crossover(parent1.Weights.WEIGHT_OPPONENT_MOBILITY, parent2.Weights.WEIGHT_OPPONENT_MOBILITY), 150),
+				WEIGHT_LOOKAHEAD_CONTROL:    mutate(crossover(parent1.Weights.WEIGHT_LOOKAHEAD_CONTROL, parent2.Weights.WEIGHT_LOOKAHEAD_CONTROL), 150),
+				WEIGHT_SPACE_EFFICIENCY:     mutate(crossover(parent1.Weights.WEIGHT_SPACE_EFFICIENCY, parent2.Weights.WEIGHT_SPACE_EFFICIENCY), 100),
+				WEIGHT_AGGRESSIVE_CUTOFF:    mutate(crossover(parent1.Weights.WEIGHT_AGGRESSIVE_CUTOFF, parent2.Weights.WEIGHT_AGGRESSIVE_CUTOFF), 200),
+				WEIGHT_DEFENSIVE_SPACING:    mutate(crossover(parent1.Weights.WEIGHT_DEFENSIVE_SPACING, parent2.Weights.WEIGHT_DEFENSIVE_SPACING), 150),
+				WEIGHT_CENTER_CONTROL:       mutate(crossover(parent1.Weights.WEIGHT_CENTER_CONTROL, parent2.Weights.WEIGHT_CENTER_CONTROL), 100),
+				WEIGHT_FUTURE_TERRITORY:     mutate(crossover(parent1.Weights.WEIGHT_FUTURE_TERRITORY, parent2.Weights.WEIGHT_FUTURE_TERRITORY), 150),
+				WEIGHT_MOBILITY_PROJECTION:  mutate(crossover(parent1.Weights.WEIGHT_MOBILITY_PROJECTION, parent2.Weights.WEIGHT_MOBILITY_PROJECTION), 100),
+				WEIGHT_CHOKE_POINT:          mutate(crossover(parent1.Weights.WEIGHT_CHOKE_POINT, parent2.Weights.WEIGHT_CHOKE_POINT), 100),
 			}
 			newPopulation[i].Weights = child
 		}
