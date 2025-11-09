@@ -296,11 +296,47 @@ func evaluatePosition(myAgent *Agent, otherAgent *Agent) int {
 		return WIN_SCORE
 	}
 
+	myHead := myAgent.GetHead()
+	oppHead := otherAgent.GetHead()
+
+	myHeadState := myAgent.Board.GetCellState(myHead)
+	oppHeadState := otherAgent.Board.GetCellState(oppHead)
+	myAgent.Board.SetCellState(myHead, EMPTY)
+	otherAgent.Board.SetCellState(oppHead, EMPTY)
+
+	cc := NewConnectedComponents(myAgent.Board)
+	cc.Calculate()
+
+	myAgent.Board.SetCellState(myHead, myHeadState)
+	otherAgent.Board.SetCellState(oppHead, oppHeadState)
+
+	if !cc.AreConnected(myHead, oppHead) {
+		myComponentID := cc.GetComponentID(myHead)
+		oppComponentID := cc.GetComponentID(oppHead)
+
+		myComponentSize := cc.GetComponentSize(myComponentID)
+		oppComponentSize := cc.GetComponentSize(oppComponentID)
+
+		endgameScore := 1000 * (myComponentSize - oppComponentSize)
+
+		logDebug("ENDGAME MODE: Players separated! My component: %d, Opp component: %d, Score: %d",
+			myComponentSize, oppComponentSize, endgameScore)
+
+		return endgameScore
+	}
+
 	score := 0
 
-	myTerritory, oppTerritory := calculateVoronoiTerritory(myAgent, otherAgent)
+	myTerritory, oppTerritory, control := calculateVoronoiControl(myAgent, otherAgent)
+
+	myEdgeBonus := calculateEdgeBonus(myAgent.Board, control, 1)
+	oppEdgeBonus := calculateEdgeBonus(otherAgent.Board, control, 2)
+
 	territoryDiff := myTerritory - oppTerritory
+	edgeDiff := myEdgeBonus - oppEdgeBonus
+
 	score += territoryDiff * 50
+	score += edgeDiff * 10
 
 	myFreedom := len(myValidMoves)
 	opponentFreedom := len(opponentValidMoves)
@@ -316,10 +352,7 @@ func evaluatePosition(myAgent *Agent, otherAgent *Agent) int {
 	apf := NewArticulationPointFinder(myAgent.Board)
 	aps := apf.FindArticulationPoints()
 
-	myHead := myAgent.GetHead()
 	mySpaceFillingScore := EvaluateSpaceFilling(myAgent.Board, myHead, aps)
-
-	oppHead := otherAgent.GetHead()
 	oppSpaceFillingScore := EvaluateSpaceFilling(otherAgent.Board, oppHead, aps)
 
 	score += (mySpaceFillingScore - oppSpaceFillingScore) / 10
@@ -474,6 +507,36 @@ func calculateVoronoiControl(myAgent *Agent, otherAgent *Agent) (int, int, [][]i
 	}
 
 	return myTerritory, oppTerritory, control
+}
+
+func calculateEdgeBonus(board *GameBoard, control [][]int, owner int) int {
+	bonus := 0
+
+	for y := 0; y < BOARD_HEIGHT; y++ {
+		for x := 0; x < BOARD_WIDTH; x++ {
+			if control[y][x] != owner {
+				continue
+			}
+
+			pos := Position{X: x, Y: y}
+			cellState := board.GetCellState(pos)
+
+			if cellState != EMPTY {
+				continue
+			}
+
+			for _, dir := range AllDirections {
+				neighbor := Position{X: pos.X + dir.DX, Y: pos.Y + dir.DY}
+				neighbor = board.TorusCheck(neighbor)
+
+				if board.GetCellState(neighbor) == EMPTY {
+					bonus++
+				}
+			}
+		}
+	}
+
+	return bonus
 }
 
 func printVoronoiMap(myAgent *Agent, otherAgent *Agent, control [][]int, bestMove Move) {

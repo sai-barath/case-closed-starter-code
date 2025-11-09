@@ -20,7 +20,7 @@ var (
 	DOWN  = Direction{DX: 0, DY: 1}
 	RIGHT = Direction{DX: 1, DY: 0}
 	LEFT  = Direction{DX: -1, DY: 0}
-	
+
 	AllDirections = []Direction{UP, DOWN, LEFT, RIGHT}
 )
 
@@ -93,12 +93,12 @@ func NewAgent(agentID int, startPos Position, startDir Direction, board *GameBoa
 		X: startPos.X + startDir.DX,
 		Y: startPos.Y + startDir.DY,
 	}
-	
+
 	trail := []Position{startPos, second}
 	trailSet := make(map[Position]bool)
 	trailSet[startPos] = true
 	trailSet[second] = true
-	
+
 	agent := &Agent{
 		AgentID:         agentID,
 		Trail:           trail,
@@ -109,22 +109,22 @@ func NewAgent(agentID int, startPos Position, startDir Direction, board *GameBoa
 		Length:          2,
 		BoostsRemaining: 3,
 	}
-	
+
 	board.SetCellState(startPos, AGENT)
 	board.SetCellState(second, AGENT)
-	
+
 	return agent
 }
 
 func (a *Agent) Clone(newBoard *GameBoard) *Agent {
 	newTrail := make([]Position, len(a.Trail))
 	copy(newTrail, a.Trail)
-	
+
 	newTrailSet := make(map[Position]bool, len(a.TrailSet))
 	for k, v := range a.TrailSet {
 		newTrailSet[k] = v
 	}
-	
+
 	return &Agent{
 		AgentID:         a.AgentID,
 		Trail:           newTrail,
@@ -160,36 +160,36 @@ func (a *Agent) GetValidMoves() []Direction {
 	if !a.Alive {
 		return nil
 	}
-	
+
 	head := a.GetHead()
 	valid := make([]Direction, 0, 4)
 	for _, dir := range AllDirections {
 		if dir.DX == -a.Direction.DX && dir.DY == -a.Direction.DY {
 			continue
 		}
-		
+
 		nextPos := Position{X: head.X + dir.DX, Y: head.Y + dir.DY}
 		nextPos = a.Board.TorusCheck(nextPos)
-		
+
 		if a.Board.GetCellState(nextPos) == AGENT {
 			continue
 		}
-		
+
 		valid = append(valid, dir)
 	}
 	return valid
 }
 
 type MoveState struct {
-	AddedPositions   []Position
-	OldDirection     Direction
-	NewDirection     Direction
-	BoostUsed        bool
-	MyAliveChanged   bool
+	AddedPositions    []Position
+	OldDirection      Direction
+	NewDirection      Direction
+	BoostUsed         bool
+	MyAliveChanged    bool
 	OtherAliveChanged bool
-	OldMyAlive       bool
-	OldOtherAlive    bool
-	LengthAdded      int
+	OldMyAlive        bool
+	OldOtherAlive     bool
+	LengthAdded       int
 }
 
 func (a *Agent) Move(direction Direction, otherAgent *Agent, useBoost bool) bool {
@@ -256,10 +256,13 @@ func (a *Agent) UndoableMove(direction Direction, otherAgent *Agent, useBoost bo
 		BoostUsed:    false,
 		LengthAdded:  0,
 	}
-	
+
 	if otherAgent != nil {
 		state.OldOtherAlive = otherAgent.Alive
 	}
+
+	// Debug logging
+	// fmt.Printf("DEBUG UndoableMove: a.Alive=%v, otherAgent.Alive=%v\n", a.Alive, otherAgent != nil && otherAgent.Alive)
 
 	if !a.Alive {
 		return false, state
@@ -295,20 +298,22 @@ func (a *Agent) UndoableMove(direction Direction, otherAgent *Agent, useBoost bo
 		if cellState == AGENT {
 			if a.ContainsPosition(newHead) {
 				a.Alive = false
-				state.MyAliveChanged = true
+				state.MyAliveChanged = (state.OldMyAlive != a.Alive)
 				return false, state
 			}
 
 			if otherAgent != nil && otherAgent.Alive && otherAgent.ContainsPosition(newHead) {
 				if otherAgent.IsHead(newHead) {
+					oldMyAlive := state.OldMyAlive
+					oldOtherAlive := state.OldOtherAlive
 					a.Alive = false
 					otherAgent.Alive = false
-					state.MyAliveChanged = true
-					state.OtherAliveChanged = true
+					state.MyAliveChanged = (oldMyAlive != a.Alive)
+					state.OtherAliveChanged = (oldOtherAlive != otherAgent.Alive)
 					return false, state
 				} else {
 					a.Alive = false
-					state.MyAliveChanged = true
+					state.MyAliveChanged = (state.OldMyAlive != a.Alive)
 					return false, state
 				}
 			}
@@ -328,24 +333,28 @@ func (a *Agent) UndoableMove(direction Direction, otherAgent *Agent, useBoost bo
 func (a *Agent) UndoMove(state MoveState, otherAgent *Agent) {
 	for i := len(state.AddedPositions) - 1; i >= 0; i-- {
 		pos := state.AddedPositions[i]
-		if len(a.Trail) > 0 && a.Trail[len(a.Trail)-1].X == pos.X && a.Trail[len(a.Trail)-1].Y == pos.Y {
-			a.Trail = a.Trail[:len(a.Trail)-1]
+
+		if len(a.Trail) > 0 {
+			lastPos := a.Trail[len(a.Trail)-1]
+			if lastPos.X == pos.X && lastPos.Y == pos.Y {
+				a.Trail = a.Trail[:len(a.Trail)-1]
+				delete(a.TrailSet, pos)
+				a.Board.SetCellState(pos, EMPTY)
+			}
 		}
-		delete(a.TrailSet, pos)
-		a.Board.SetCellState(pos, EMPTY)
 	}
-	
+
 	a.Length -= state.LengthAdded
 	a.Direction = state.OldDirection
-	
+
 	if state.BoostUsed {
 		a.BoostsRemaining++
 	}
-	
+
 	if state.MyAliveChanged {
 		a.Alive = state.OldMyAlive
 	}
-	
+
 	if state.OtherAliveChanged && otherAgent != nil {
 		otherAgent.Alive = state.OldOtherAlive
 	}
@@ -370,7 +379,7 @@ func NewGame() *Game {
 	board := NewGameBoard(18, 20)
 	agent1 := NewAgent(1, Position{X: 1, Y: 2}, RIGHT, board)
 	agent2 := NewAgent(2, Position{X: 17, Y: 15}, LEFT, board)
-	
+
 	return &Game{
 		Board:  board,
 		Agent1: agent1,
@@ -392,10 +401,10 @@ func (g *Game) Step(dir1, dir2 Direction, boost1, boost2 bool) *GameResult {
 			return &result
 		}
 	}
-	
+
 	agentOneAlive := g.Agent1.Move(dir1, g.Agent2, boost1)
 	agentTwoAlive := g.Agent2.Move(dir2, g.Agent1, boost2)
-	
+
 	if !agentOneAlive && !agentTwoAlive {
 		result := Draw
 		return &result
@@ -406,7 +415,7 @@ func (g *Game) Step(dir1, dir2 Direction, boost1, boost2 bool) *GameResult {
 		result := Agent1Win
 		return &result
 	}
-	
+
 	g.Turns++
 	return nil
 }
