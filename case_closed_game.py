@@ -44,11 +44,52 @@ class GameBoard:
         
         return random.choice(empty_cells)
 
+    def calculate_voronoi_control(self, agent1_head, agent2_head):
+        """BFS to calculate which cells each agent controls (Voronoi diagram)"""
+        control = {}  # position -> agent_id (1 or 2)
+        
+        if not agent1_head and not agent2_head:
+            return control
+        
+        visited = {}
+        queue = []
+        
+        if agent1_head:
+            queue.append((agent1_head, 1))
+            visited[agent1_head] = 1
+        if agent2_head:
+            queue.append((agent2_head, 2))
+            visited[agent2_head] = 2
+        
+        idx = 0
+        while idx < len(queue):
+            pos, owner = queue[idx]
+            idx += 1
+            
+            for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
+                next_pos = (pos[0] + dx, pos[1] + dy)
+                next_pos = self._torus_check(next_pos)
+                
+                if self.get_cell_state(next_pos) != EMPTY:
+                    continue
+                
+                if next_pos not in visited:
+                    visited[next_pos] = owner
+                    queue.append((next_pos, owner))
+        
+        return visited
+
     def tostr(self, agent1_head=None, agent1_trail=None, agent2_head=None, agent2_trail=None) -> str:
         RED = '\033[31m'
         BLUE = '\033[34m'
+        RED_DIM = '\033[91m'
+        BLUE_DIM = '\033[94m'
         RESET = '\033[0m'
         chars = {EMPTY: '.'}
+        
+        # Calculate Voronoi control
+        control = self.calculate_voronoi_control(agent1_head, agent2_head)
+        
         board_str = ""
         for y in range(self.height):
             for x in range(self.width):
@@ -61,6 +102,13 @@ class GameBoard:
                     board_str += f'{RED}a{RESET} '
                 elif agent2_trail and pos in agent2_trail:
                     board_str += f'{BLUE}b{RESET} '
+                elif self.grid[y][x] == EMPTY and pos in control:
+                    if control[pos] == 1:
+                        board_str += f'{RED_DIM}·{RESET} '
+                    elif control[pos] == 2:
+                        board_str += f'{BLUE_DIM}·{RESET} '
+                    else:
+                        board_str += chars.get(self.grid[y][x], '?') + ' '
                 else:
                     board_str += chars.get(self.grid[y][x], '?') + ' '
             board_str += '\n'

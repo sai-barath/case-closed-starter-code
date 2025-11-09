@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"math/rand"
 	"os"
 	"time"
 )
@@ -16,6 +17,21 @@ const (
 	DRAW_SCORE        = 0
 	BOARD_HEIGHT      = 18
 	BOARD_WIDTH       = 20
+)
+
+// Tunable parameters for evolutionary training
+var (
+	WEIGHT_TERRITORY      = 50
+	WEIGHT_FREEDOM        = 150
+	WEIGHT_REACHABLE      = 100
+	WEIGHT_BOOST          = 20
+	WEIGHT_CHAMBER        = 30
+	WEIGHT_EDGE           = 15
+	WEIGHT_COMPACTNESS    = 25
+	WEIGHT_CUTOFF         = 40
+	WEIGHT_GROWTH         = 30
+	PENALTY_CORRIDOR_BASE = 500
+	PENALTY_HEAD_DISTANCE = 200
 )
 
 func logDebug(format string, args ...interface{}) {
@@ -48,6 +64,9 @@ func (ctx *SearchContext) timeExpired() bool {
 
 func DecideMove(myTrail, otherTrail [][]int, turnCount, myBoosts, playerNumber int) string {
 	logDebug("Turn %d: Starting search with %d boosts (Player %d)", turnCount, myBoosts, playerNumber)
+
+	// Seed randomness based on turn and player
+	rand.Seed(time.Now().UnixNano() + int64(turnCount)*1000 + int64(playerNumber))
 
 	if len(myTrail) == 0 {
 		return "RIGHT"
@@ -133,6 +152,11 @@ func searchAtDepth(snapshot GameStateSnapshot, maxDepth int, ctx *SearchContext)
 	if len(validMoves) == 0 {
 		return Move{direction: RIGHT, useBoost: false, score: LOSE_SCORE}
 	}
+
+	// Shuffle move order for variety in exploration
+	rand.Shuffle(len(validMoves), func(i, j int) {
+		validMoves[i], validMoves[j] = validMoves[j], validMoves[i]
+	})
 
 	bestMove := Move{direction: validMoves[0], useBoost: false, score: math.MinInt32}
 	alpha := math.MinInt32
@@ -355,30 +379,317 @@ func evaluatePosition(myAgent *Agent, otherAgent *Agent) int {
 	boostDiff := myAgent.BoostsRemaining - otherAgent.BoostsRemaining
 
 	// Base scoring (similar to steamroller03, but keep territory at 50 to match their speed)
-	score += territoryDiff * 50 // REDUCED from 100 to match steamroller03
-	score += (myFreedom - opponentFreedom) * 150
-	score += (myLocalSpace - oppLocalSpace) * 100
-	score += boostDiff * 20
+	score += territoryDiff * WEIGHT_TERRITORY
+	score += (myFreedom - opponentFreedom) * WEIGHT_FREEDOM
+	score += (myLocalSpace - oppLocalSpace) * WEIGHT_REACHABLE
+	score += boostDiff * WEIGHT_BOOST
 
 	// OUR STRATEGIC ADVANTAGES (kept but with lighter weights)
 	// Chamber tree detects articulation points - tactical advantage
 	ct := NewChamberTree(myAgent.Board)
 	chamberScore := ct.EvaluateChamberTree(myHead, oppHead)
-	score += chamberScore * 30 // INCREASED from 10 to make it more valuable than territory
+	score += chamberScore * WEIGHT_CHAMBER
 
 	// Edge bonus - positions near walls are safer
 	myEdgeBonus := calculateEdgeBonus(myAgent.Board, control, 1)
 	oppEdgeBonus := calculateEdgeBonus(otherAgent.Board, control, 2)
 	edgeDiff := myEdgeBonus - oppEdgeBonus
-	score += edgeDiff * 15 // REDUCED from 20 to be less aggressive
+	score += edgeDiff * WEIGHT_EDGE
 
 	// NEW: Space-filling efficiency - penalize leaving gaps in our territory
 	// Count the "compactness" of each agent's position
 	myCompactness := evaluateCompactness(myAgent, control, 1)
 	oppCompactness := evaluateCompactness(otherAgent, control, 2)
-	score += (myCompactness - oppCompactness) * 25
+	score += (myCompactness - oppCompactness) * WEIGHT_COMPACTNESS
+
+	// NEW: Corridor trap detection - heavily penalize dead-end corridors
+	myTrapPenalty := detectCorridorTraps(myAgent, otherAgent)
+	oppTrapPenalty := detectCorridorTraps(otherAgent, myAgent)
+	score += (oppTrapPenalty - myTrapPenalty) // Penalize us being trapped, reward opponent trapped
+
+	// NEW: Head-to-head distance - maintain safe distance from opponent
+	headDistance := torusDistance(myHead, oppHead, myAgent.Board)
+	if headDistance <= 2 {
+		score -= PENALTY_HEAD_DISTANCE
+	} else if headDistance <= 4 {
+		score -= PENALTY_HEAD_DISTANCE / 4
+	}
+
+	// NEW: Cut-off opportunities - detect if we can trap opponent
+	cutoffScore := evaluateCutoffOpportunities(myAgent, otherAgent, control)
+	score += cutoffScore * WEIGHT_CUTOFF
+
+	// NEW: Future space advantage - look ahead at space growth potential
+	myGrowthPotential := evaluateSpaceGrowth(myAgent, otherAgent, control, 1)
+	oppGrowthPotential := evaluateSpaceGrowth(otherAgent, myAgent, control, 2)
+	score += (myGrowthPotential - oppGrowthPotential) * WEIGHT_GROWTH
 
 	return score
+}
+
+// detectCorridorTraps simulates future moves to detect if agent is in a narrow corridor with no escape
+// Returns penalty score: higher = more trapped
+func detectCorridorTraps(agent *Agent, opponent *Agent) int {
+	if !agent.Alive {
+		return 0
+	}
+
+	// Quick check: if we currently have 3-4 moves, we're probably not in a corridor
+	currentMoves := agent.GetValidMoves()
+	if len(currentMoves) >= 3 {
+		return 0 // Not in a corridor
+	}
+
+	if len(currentMoves) == 0 {
+		return PENALTY_CORRIDOR_BASE * 10 // Already trapped
+	}
+
+	// Simulate 3 moves ahead checking mobility at each step
+	penalty := 0
+	testBoard := agent.Board.Clone()
+	testAgent := agent.Clone(testBoard)
+	testOpponent := opponent.Clone(testBoard)
+
+	// Try all possible move sequences (limited depth to save performance)
+	minFutureMobility := 4 // Best case: 4 valid moves
+	validMovesAtDepth := []int{}
+
+	// Depth 1
+	for _, move1 := range currentMoves {
+		// Clone for each branch
+		b1 := testBoard.Clone()
+		a1 := testAgent.Clone(b1)
+		o1 := testOpponent.Clone(b1)
+
+		success := a1.Move(move1, o1, false)
+		if !success || !a1.Alive {
+			continue
+		}
+
+		moves1 := a1.GetValidMoves()
+		validMovesAtDepth = append(validMovesAtDepth, len(moves1))
+		if len(moves1) < minFutureMobility {
+			minFutureMobility = len(moves1)
+		}
+
+		if len(moves1) == 0 {
+			continue // Dead end after 1 move
+		}
+
+		// Depth 2 - only explore up to 2 moves at this level to save time
+		maxMovesToCheck := 2
+		if len(moves1) < maxMovesToCheck {
+			maxMovesToCheck = len(moves1)
+		}
+
+		for i := 0; i < maxMovesToCheck; i++ {
+			move2 := moves1[i]
+			b2 := b1.Clone()
+			a2 := a1.Clone(b2)
+			o2 := o1.Clone(b2)
+
+			success := a2.Move(move2, o2, false)
+			if !success || !a2.Alive {
+				continue
+			}
+
+			moves2 := a2.GetValidMoves()
+			validMovesAtDepth = append(validMovesAtDepth, len(moves2))
+			if len(moves2) < minFutureMobility {
+				minFutureMobility = len(moves2)
+			}
+
+			if len(moves2) == 0 {
+				continue // Dead end after 2 moves
+			}
+
+			// Depth 3 - only check first move
+			if len(moves2) > 0 {
+				b3 := b2.Clone()
+				a3 := a2.Clone(b3)
+				o3 := o2.Clone(b3)
+
+				success := a3.Move(moves2[0], o3, false)
+				if success && a3.Alive {
+					moves3 := a3.GetValidMoves()
+					validMovesAtDepth = append(validMovesAtDepth, len(moves3))
+					if len(moves3) < minFutureMobility {
+						minFutureMobility = len(moves3)
+					}
+				}
+			}
+		}
+	}
+
+	// Analyze mobility trend
+	// If future mobility is consistently low (1-2 moves), we're in a corridor
+	avgFutureMobility := 0
+	if len(validMovesAtDepth) > 0 {
+		sum := 0
+		for _, m := range validMovesAtDepth {
+			sum += m
+		}
+		avgFutureMobility = sum / len(validMovesAtDepth)
+	}
+
+	// Penalty based on how constrained we become
+	if minFutureMobility <= 1 {
+		penalty += PENALTY_CORRIDOR_BASE * 6 // Very bad: will have ≤1 move soon
+	} else if minFutureMobility == 2 && avgFutureMobility*2 < 5 { // avgFutureMobility < 2.5
+		penalty += PENALTY_CORRIDOR_BASE * 3 // Bad: consistently low mobility
+	} else if avgFutureMobility*10 < 20 { // avgFutureMobility < 2.0
+		penalty += PENALTY_CORRIDOR_BASE // Warning: entering narrow area
+	}
+
+	return penalty
+}
+
+// torusDistance calculates Manhattan distance on a torus board
+func torusDistance(p1, p2 Position, board *GameBoard) int {
+	dx := abs(p1.X - p2.X)
+	dy := abs(p1.Y - p2.Y)
+
+	// Torus wraparound - check if going the other way is shorter
+	if dx > board.Width/2 {
+		dx = board.Width - dx
+	}
+	if dy > board.Height/2 {
+		dy = board.Height - dy
+	}
+
+	return dx + dy
+}
+
+// evaluateCutoffOpportunities detects if we can trap opponent by cutting them off
+func evaluateCutoffOpportunities(myAgent *Agent, otherAgent *Agent, control [][]int) int {
+	if !myAgent.Alive || !otherAgent.Alive {
+		return 0
+	}
+
+	oppHead := otherAgent.GetHead()
+
+	// Check if opponent is in a region we can potentially seal off
+	// Count how many cells near opponent we control vs they control
+	oppRegionSize := 0
+	myControlNearOpp := 0
+	oppControlNearOpp := 0
+
+	// BFS from opponent head, limited range
+	visited := make(map[Position]bool)
+	queue := []Position{oppHead}
+	visited[oppHead] = true
+	depth := 0
+	maxDepth := 8
+
+	for len(queue) > 0 && depth < maxDepth {
+		levelSize := len(queue)
+		for i := 0; i < levelSize; i++ {
+			current := queue[0]
+			queue = queue[1:]
+			oppRegionSize++
+
+			for _, dir := range AllDirections {
+				next := Position{
+					X: current.X + dir.DX,
+					Y: current.Y + dir.DY,
+				}
+				next = myAgent.Board.TorusCheck(next)
+
+				state := myAgent.Board.GetCellState(next)
+
+				if state == EMPTY {
+					if !visited[next] {
+						visited[next] = true
+						queue = append(queue, next)
+					}
+
+					// Check who controls the border
+					if control[next.Y][next.X] == 1 {
+						myControlNearOpp++
+					} else if control[next.Y][next.X] == 2 {
+						oppControlNearOpp++
+					}
+				} else if myAgent.ContainsPosition(next) {
+					// Our trail is a barrier
+					myControlNearOpp += 2
+				}
+			}
+		}
+		depth++
+	}
+
+	// If we control more of the border around opponent, we have a cutoff opportunity
+	if myControlNearOpp > oppControlNearOpp*2 && oppRegionSize < 30 {
+		return 5 // Good cutoff opportunity
+	} else if myControlNearOpp > oppControlNearOpp {
+		return 2 // Moderate cutoff potential
+	}
+
+	return 0
+}
+
+// evaluateSpaceGrowth estimates how much space an agent can expand into
+// This is different from countReachableSpace - it considers growth *direction*
+func evaluateSpaceGrowth(agent *Agent, opponent *Agent, control [][]int, playerID int) int {
+	if !agent.Alive {
+		return 0
+	}
+
+	head := agent.GetHead()
+	growthScore := 0
+
+	// Check each direction from head
+	for _, dir := range AllDirections {
+		next := Position{
+			X: head.X + dir.DX,
+			Y: head.Y + dir.DY,
+		}
+		next = agent.Board.TorusCheck(next)
+
+		if agent.Board.GetCellState(next) != EMPTY {
+			continue
+		}
+
+		// BFS in this direction to see how much space opens up
+		visited := make(map[Position]bool)
+		queue := []Position{next}
+		visited[next] = true
+		directionSpace := 0
+		controlledSpace := 0
+		maxDepth := 10
+
+		for len(queue) > 0 && directionSpace < maxDepth {
+			current := queue[0]
+			queue = queue[1:]
+			directionSpace++
+
+			if control[current.Y][current.X] == playerID {
+				controlledSpace++
+			}
+
+			for _, d := range AllDirections {
+				nextPos := Position{
+					X: current.X + d.DX,
+					Y: current.Y + d.DY,
+				}
+				nextPos = agent.Board.TorusCheck(nextPos)
+
+				if !visited[nextPos] && agent.Board.GetCellState(nextPos) == EMPTY {
+					visited[nextPos] = true
+					queue = append(queue, nextPos)
+				}
+			}
+		}
+
+		// Reward directions that lead to open space we control
+		if directionSpace > 5 && controlledSpace > directionSpace/2 {
+			growthScore += 3
+		} else if directionSpace > 3 {
+			growthScore += 1
+		}
+	}
+
+	return growthScore
 }
 
 // evaluateCompactness measures how efficiently an agent is filling its controlled territory
@@ -494,8 +805,7 @@ func shouldUseBoost(snapshot GameStateSnapshot, dir Direction) bool {
 		return true
 	}
 
-	// OUR TACTICAL BOOST: Use boost to create chambers/traps
-	// Simulate boost move and check if it creates articulation point advantage
+	// NEW: Aggressive boost - use when we can cut opponent off
 	testBoard := snapshot.board.Clone()
 	testMyAgent := snapshot.myAgent.Clone(testBoard)
 	testOtherAgent := snapshot.otherAgent.Clone(testBoard)
@@ -514,6 +824,16 @@ func shouldUseBoost(snapshot GameStateSnapshot, dir Direction) bool {
 
 	// Use boost if it creates a significant chamber advantage (trap opponent)
 	if chamberScore > 3 {
+		return true
+	}
+
+	// NEW: Use boost to get closer and cut off opponent when we're ahead
+	myHeadBefore := snapshot.myAgent.GetHead()
+	distBefore := torusDistance(myHeadBefore, oppHead, snapshot.board)
+	distAfter := torusDistance(myHead, oppHead, testMyAgent.Board)
+
+	// If we're ahead and boost gets us significantly closer, use it aggressively
+	if myTerritory > oppTerritory && distBefore > 5 && distAfter < distBefore-2 {
 		return true
 	}
 
