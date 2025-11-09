@@ -21,17 +21,17 @@ const (
 
 // Tunable parameters for evolutionary training
 var (
-	WEIGHT_TERRITORY       = 26
-	WEIGHT_FREEDOM         = 120
-	WEIGHT_REACHABLE       = 136
-	WEIGHT_BOOST           = 14
-	WEIGHT_CHAMBER         = 30
-	WEIGHT_EDGE            = 5
-	WEIGHT_COMPACTNESS     = 25
-	WEIGHT_CUTOFF          = 12
-	WEIGHT_GROWTH          = 30
-	PENALTY_CORRIDOR_BASE  = 500
-	PENALTY_HEAD_DISTANCE  = 200
+	WEIGHT_TERRITORY      = 26
+	WEIGHT_FREEDOM        = 120
+	WEIGHT_REACHABLE      = 136
+	WEIGHT_BOOST          = 14
+	WEIGHT_CHAMBER        = 30
+	WEIGHT_EDGE           = 5
+	WEIGHT_COMPACTNESS    = 25
+	WEIGHT_CUTOFF         = 12
+	WEIGHT_GROWTH         = 30
+	PENALTY_CORRIDOR_BASE = 500
+	PENALTY_HEAD_DISTANCE = 200
 )
 
 func logDebug(format string, args ...interface{}) {
@@ -45,6 +45,7 @@ type GameStateSnapshot struct {
 	otherAgent *Agent
 	board      *GameBoard
 	amIRed     bool
+	turnCount  int
 }
 
 type Move struct {
@@ -72,7 +73,7 @@ func DecideMove(myTrail, otherTrail [][]int, turnCount, myBoosts, playerNumber i
 		return "RIGHT"
 	}
 
-	snapshot := buildGameSnapshot(myTrail, otherTrail, myBoosts, playerNumber)
+	snapshot := buildGameSnapshot(myTrail, otherTrail, myBoosts, playerNumber, turnCount)
 
 	if snapshot.myAgent == nil || !snapshot.myAgent.Alive {
 		return "RIGHT"
@@ -227,7 +228,7 @@ func evaluateMoveAtDepth(snapshot GameStateSnapshot, dir Direction, useBoost boo
 				// Simulate my move first, then opponent's reaction
 				_, myState := snapshot.myAgent.UndoableMove(dir, snapshot.otherAgent, useBoost)
 				_, oppState := snapshot.otherAgent.UndoableMove(oppDir, snapshot.myAgent, oppUseBoost)
-				score = alphabeta(snapshot.myAgent, snapshot.otherAgent, maxDepth-1, alpha, beta, true, ctx)
+				score = alphabeta(snapshot.myAgent, snapshot.otherAgent, maxDepth-1, alpha, beta, true, ctx, snapshot.turnCount)
 				snapshot.otherAgent.UndoMove(oppState, snapshot.myAgent)
 				snapshot.myAgent.UndoMove(myState, snapshot.otherAgent)
 			} else {
@@ -235,7 +236,7 @@ func evaluateMoveAtDepth(snapshot GameStateSnapshot, dir Direction, useBoost boo
 				// Simulate opponent's move first, then my reaction
 				_, oppState := snapshot.otherAgent.UndoableMove(oppDir, snapshot.myAgent, oppUseBoost)
 				_, myState := snapshot.myAgent.UndoableMove(dir, snapshot.otherAgent, useBoost)
-				score = alphabeta(snapshot.myAgent, snapshot.otherAgent, maxDepth-1, alpha, beta, true, ctx)
+				score = alphabeta(snapshot.myAgent, snapshot.otherAgent, maxDepth-1, alpha, beta, true, ctx, snapshot.turnCount)
 				snapshot.myAgent.UndoMove(myState, snapshot.otherAgent)
 				snapshot.otherAgent.UndoMove(oppState, snapshot.myAgent)
 			}
@@ -257,13 +258,13 @@ func evaluateMoveAtDepth(snapshot GameStateSnapshot, dir Direction, useBoost boo
 	return bestScore
 }
 
-func alphabeta(myAgent *Agent, otherAgent *Agent, depth int, alpha int, beta int, isMaximizing bool, ctx *SearchContext) int {
+func alphabeta(myAgent *Agent, otherAgent *Agent, depth int, alpha int, beta int, isMaximizing bool, ctx *SearchContext, turnCount int) int {
 	if ctx.timeExpired() {
-		return evaluatePosition(myAgent, otherAgent)
+		return evaluatePosition(myAgent, otherAgent, turnCount)
 	}
 
 	if depth == 0 || !myAgent.Alive || !otherAgent.Alive {
-		return evaluatePosition(myAgent, otherAgent)
+		return evaluatePosition(myAgent, otherAgent, turnCount)
 	}
 
 	if isMaximizing {
@@ -283,7 +284,7 @@ func alphabeta(myAgent *Agent, otherAgent *Agent, depth int, alpha int, beta int
 
 				_, myState := myAgent.UndoableMove(myDir, otherAgent, false)
 				_, oppState := otherAgent.UndoableMove(oppDir, myAgent, false)
-				score := alphabeta(myAgent, otherAgent, depth-1, alpha, beta, true, ctx)
+				score := alphabeta(myAgent, otherAgent, depth-1, alpha, beta, true, ctx, turnCount)
 				otherAgent.UndoMove(oppState, myAgent)
 				myAgent.UndoMove(myState, otherAgent)
 
@@ -309,10 +310,10 @@ func alphabeta(myAgent *Agent, otherAgent *Agent, depth int, alpha int, beta int
 		return maxScore
 	}
 
-	return evaluatePosition(myAgent, otherAgent)
+	return evaluatePosition(myAgent, otherAgent, turnCount)
 }
 
-func evaluatePosition(myAgent *Agent, otherAgent *Agent) int {
+func evaluatePosition(myAgent *Agent, otherAgent *Agent, turnCount int) int {
 	if !myAgent.Alive && !otherAgent.Alive {
 		return DRAW_SCORE
 	}
@@ -366,7 +367,8 @@ func evaluatePosition(myAgent *Agent, otherAgent *Agent) int {
 
 	score := 0
 
-	// Core metrics (same as steamroller03)
+	weights := getDynamicWeights(turnCount)
+
 	myTerritory, oppTerritory, control := calculateVoronoiControl(myAgent, otherAgent)
 	territoryDiff := myTerritory - oppTerritory
 
@@ -378,36 +380,28 @@ func evaluatePosition(myAgent *Agent, otherAgent *Agent) int {
 
 	boostDiff := myAgent.BoostsRemaining - otherAgent.BoostsRemaining
 
-	// Base scoring (similar to steamroller03, but keep territory at 50 to match their speed)
-	score += territoryDiff * WEIGHT_TERRITORY
-	score += (myFreedom - opponentFreedom) * WEIGHT_FREEDOM
-	score += (myLocalSpace - oppLocalSpace) * WEIGHT_REACHABLE
-	score += boostDiff * WEIGHT_BOOST
+	score += territoryDiff * weights.territory
+	score += (myFreedom - opponentFreedom) * weights.freedom
+	score += (myLocalSpace - oppLocalSpace) * weights.reachable
+	score += boostDiff * weights.boost
 
-	// OUR STRATEGIC ADVANTAGES (kept but with lighter weights)
-	// Chamber tree detects articulation points - tactical advantage
 	ct := NewChamberTree(myAgent.Board)
 	chamberScore := ct.EvaluateChamberTree(myHead, oppHead)
-	score += chamberScore * WEIGHT_CHAMBER
+	score += chamberScore * weights.chamber
 
-	// Edge bonus - positions near walls are safer
 	myEdgeBonus := calculateEdgeBonus(myAgent.Board, control, 1)
 	oppEdgeBonus := calculateEdgeBonus(otherAgent.Board, control, 2)
 	edgeDiff := myEdgeBonus - oppEdgeBonus
-	score += edgeDiff * WEIGHT_EDGE
+	score += edgeDiff * weights.edge
 
-	// NEW: Space-filling efficiency - penalize leaving gaps in our territory
-	// Count the "compactness" of each agent's position
 	myCompactness := evaluateCompactness(myAgent, control, 1)
 	oppCompactness := evaluateCompactness(otherAgent, control, 2)
-	score += (myCompactness - oppCompactness) * WEIGHT_COMPACTNESS
+	score += (myCompactness - oppCompactness) * weights.compactness
 
-	// NEW: Corridor trap detection - heavily penalize dead-end corridors
 	myTrapPenalty := detectCorridorTraps(myAgent, otherAgent)
 	oppTrapPenalty := detectCorridorTraps(otherAgent, myAgent)
-	score += (oppTrapPenalty - myTrapPenalty) // Penalize us being trapped, reward opponent trapped
+	score += (oppTrapPenalty - myTrapPenalty)
 
-	// NEW: Head-to-head distance - maintain safe distance from opponent
 	headDistance := torusDistance(myHead, oppHead, myAgent.Board)
 	if headDistance <= 2 {
 		score -= PENALTY_HEAD_DISTANCE
@@ -415,14 +409,15 @@ func evaluatePosition(myAgent *Agent, otherAgent *Agent) int {
 		score -= PENALTY_HEAD_DISTANCE / 4
 	}
 
-	// NEW: Cut-off opportunities - detect if we can trap opponent
 	cutoffScore := evaluateCutoffOpportunities(myAgent, otherAgent, control)
-	score += cutoffScore * WEIGHT_CUTOFF
+	score += cutoffScore * weights.cutoff
 
-	// NEW: Future space advantage - look ahead at space growth potential
 	myGrowthPotential := evaluateSpaceGrowth(myAgent, otherAgent, control, 1)
 	oppGrowthPotential := evaluateSpaceGrowth(otherAgent, myAgent, control, 2)
-	score += (myGrowthPotential - oppGrowthPotential) * WEIGHT_GROWTH
+	score += (myGrowthPotential - oppGrowthPotential) * weights.growth
+
+	chokeScore := evaluateChokePoints(myAgent, otherAgent, control)
+	score += chokeScore * weights.chokePoint
 
 	return score
 }
@@ -757,6 +752,87 @@ func evaluateCompactness(agent *Agent, control [][]int, playerID int) int {
 	return compactness
 }
 
+func evaluateChokePoints(myAgent *Agent, otherAgent *Agent, control [][]int) int {
+	if !myAgent.Alive || !otherAgent.Alive {
+		return 0
+	}
+
+	apf := NewArticulationPointFinder(myAgent.Board)
+	articulationPoints := apf.FindArticulationPoints()
+
+	if len(articulationPoints) == 0 {
+		return 0
+	}
+
+	myHead := myAgent.GetHead()
+	oppHead := otherAgent.GetHead()
+	score := 0
+
+	for ap := range articulationPoints {
+		myDist := torusDistance(myHead, ap, myAgent.Board)
+		oppDist := torusDistance(oppHead, ap, myAgent.Board)
+
+		distAdvantage := oppDist - myDist
+
+		if myDist < oppDist {
+			score += distAdvantage * 50
+
+			if myDist <= 2 {
+				score += 100
+			} else if myDist <= 4 {
+				score += 50
+			}
+		} else if oppDist < myDist {
+			score += distAdvantage * 50
+
+			if oppDist <= 2 {
+				score -= 100
+			}
+		}
+
+		chokeValue := evaluateChokePointValue(ap, myAgent.Board)
+		if chokeValue > 10 {
+			score += distAdvantage * (chokeValue / 10)
+		}
+	}
+
+	return score
+}
+
+func evaluateChokePointValue(chokePoint Position, board *GameBoard) int {
+	originalState := board.GetCellState(chokePoint)
+	board.SetCellState(chokePoint, AGENT)
+
+	cc := NewConnectedComponents(board)
+	cc.Calculate()
+
+	componentSizes := make(map[int]int)
+	for y := 0; y < board.Height; y++ {
+		for x := 0; x < board.Width; x++ {
+			compID := cc.Components[y][x]
+			if compID >= 0 {
+				componentSizes[compID]++
+			}
+		}
+	}
+
+	board.SetCellState(chokePoint, originalState)
+
+	numComponents := len(componentSizes)
+	if numComponents <= 1 {
+		return 0
+	}
+
+	value := 0
+	for _, size := range componentSizes {
+		value += size / 10
+	}
+
+	value += (numComponents - 1) * 20
+
+	return value
+}
+
 func countReachableSpace(agent *Agent, maxDepth int) int {
 	if !agent.Alive {
 		return 0
@@ -1043,7 +1119,61 @@ func abs(x int) int {
 	return x
 }
 
-func buildGameSnapshot(myTrail, otherTrail [][]int, myBoosts, playerNumber int) GameStateSnapshot {
+type WeightSet struct {
+	territory   int
+	freedom     int
+	reachable   int
+	boost       int
+	chamber     int
+	edge        int
+	compactness int
+	cutoff      int
+	growth      int
+	chokePoint  int
+}
+
+func getDynamicWeights(turnCount int) WeightSet {
+	weights := WeightSet{}
+
+	if turnCount < 50 {
+		weights.territory = WEIGHT_TERRITORY / 2
+		weights.freedom = WEIGHT_FREEDOM * 2
+		weights.reachable = WEIGHT_REACHABLE * 2
+		weights.boost = WEIGHT_BOOST
+		weights.chamber = WEIGHT_CHAMBER
+		weights.edge = WEIGHT_EDGE / 2
+		weights.compactness = WEIGHT_COMPACTNESS / 2
+		weights.cutoff = WEIGHT_CUTOFF / 2
+		weights.growth = WEIGHT_GROWTH * 2
+		weights.chokePoint = 20
+	} else if turnCount < 150 {
+		weights.territory = WEIGHT_TERRITORY
+		weights.freedom = WEIGHT_FREEDOM
+		weights.reachable = WEIGHT_REACHABLE
+		weights.boost = WEIGHT_BOOST
+		weights.chamber = WEIGHT_CHAMBER
+		weights.edge = WEIGHT_EDGE
+		weights.compactness = WEIGHT_COMPACTNESS
+		weights.cutoff = WEIGHT_CUTOFF
+		weights.growth = WEIGHT_GROWTH
+		weights.chokePoint = 40
+	} else {
+		weights.territory = WEIGHT_TERRITORY * 2
+		weights.freedom = WEIGHT_FREEDOM / 2
+		weights.reachable = WEIGHT_REACHABLE / 2
+		weights.boost = WEIGHT_BOOST
+		weights.chamber = WEIGHT_CHAMBER * 2
+		weights.edge = WEIGHT_EDGE * 2
+		weights.compactness = WEIGHT_COMPACTNESS * 2
+		weights.cutoff = WEIGHT_CUTOFF * 2
+		weights.growth = WEIGHT_GROWTH / 2
+		weights.chokePoint = 60
+	}
+
+	return weights
+}
+
+func buildGameSnapshot(myTrail, otherTrail [][]int, myBoosts, playerNumber, turnCount int) GameStateSnapshot {
 	board := NewGameBoard(BOARD_HEIGHT, BOARD_WIDTH)
 
 	for _, pos := range myTrail {
@@ -1064,6 +1194,7 @@ func buildGameSnapshot(myTrail, otherTrail [][]int, myBoosts, playerNumber int) 
 		otherAgent: otherAgent,
 		board:      board,
 		amIRed:     playerNumber == 1,
+		turnCount:  turnCount,
 	}
 }
 
