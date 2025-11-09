@@ -21,17 +21,29 @@ const (
 
 // Tunable parameters for evolutionary training
 var (
-	WEIGHT_TERRITORY      = 26
-	WEIGHT_FREEDOM        = 120
-	WEIGHT_REACHABLE      = 136
-	WEIGHT_BOOST          = 14
-	WEIGHT_CHAMBER        = 30
-	WEIGHT_EDGE           = 5
-	WEIGHT_COMPACTNESS    = 25
-	WEIGHT_CUTOFF         = 12
-	WEIGHT_GROWTH         = 30
-	PENALTY_CORRIDOR_BASE = 500
-	PENALTY_HEAD_DISTANCE = 200
+	// WEIGHT_TERRITORY      = 26
+	// WEIGHT_FREEDOM        = 120
+	// WEIGHT_REACHABLE      = 136
+	// WEIGHT_BOOST          = 14
+	// WEIGHT_CHAMBER        = 30
+	// WEIGHT_EDGE           = -10 // NEGATIVE = avoid edges
+	// WEIGHT_COMPACTNESS    = -15 // NEGATIVE = spread out
+	// WEIGHT_CUTOFF         = 12
+	// WEIGHT_GROWTH         = 30
+	// PENALTY_CORRIDOR_BASE = 500
+	// PENALTY_HEAD_DISTANCE = 200
+	WEIGHT_TERRITORY      = 140
+	WEIGHT_FREEDOM        = 105
+	WEIGHT_REACHABLE      = 110
+	WEIGHT_BOOST          = 19
+	WEIGHT_CHAMBER        = 9
+	WEIGHT_EDGE           = 37
+	WEIGHT_COMPACTNESS    = -18
+	WEIGHT_CUTOFF         = 2
+	WEIGHT_GROWTH         = 9
+	PENALTY_CORRIDOR_BASE = 677
+	PENALTY_HEAD_DISTANCE = 94
+
 )
 
 func logDebug(format string, args ...interface{}) {
