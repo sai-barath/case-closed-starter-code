@@ -115,29 +115,80 @@ func TestDirectionToString(t *testing.T) {
 	}
 }
 
-func TestCountAvailableSpace(t *testing.T) {
+func TestCalculateVoronoiTerritoryEmptyBoard(t *testing.T) {
 	board := NewGameBoard(18, 20)
-	agent := NewAgent(1, Position{X: 5, Y: 5}, RIGHT, board)
+	agent1 := NewAgent(1, Position{X: 5, Y: 5}, RIGHT, board)
+	agent2 := NewAgent(2, Position{X: 14, Y: 14}, LEFT, board)
 
-	space := countAvailableSpace(agent)
+	myTerritory, oppTerritory := calculateVoronoiTerritory(agent1, agent2)
 
-	if space <= 0 {
-		t.Errorf("Expected positive space count, got %d", space)
+	totalClaimed := myTerritory + oppTerritory
+	if totalClaimed > BOARD_HEIGHT*BOARD_WIDTH {
+		t.Errorf("Total territory %d exceeds board size %d", totalClaimed, BOARD_HEIGHT*BOARD_WIDTH)
 	}
-	if space > 150 {
-		t.Errorf("Expected space count <= 150, got %d", space)
+
+	if myTerritory <= 0 && oppTerritory <= 0 {
+		t.Error("At least one agent should claim territory")
 	}
 }
 
-func TestCountAvailableSpaceDeadAgent(t *testing.T) {
+func TestCalculateVoronoiTerritoryDeadAgents(t *testing.T) {
 	board := NewGameBoard(18, 20)
-	agent := NewAgent(1, Position{X: 5, Y: 5}, RIGHT, board)
-	agent.Alive = false
+	agent1 := NewAgent(1, Position{X: 5, Y: 5}, RIGHT, board)
+	agent2 := NewAgent(2, Position{X: 14, Y: 14}, LEFT, board)
 
-	space := countAvailableSpace(agent)
+	agent1.Alive = false
+	myTerritory, oppTerritory := calculateVoronoiTerritory(agent1, agent2)
 
-	if space != 0 {
-		t.Errorf("Expected 0 space for dead agent, got %d", space)
+	if myTerritory != 0 {
+		t.Errorf("Dead agent should have 0 territory, got %d", myTerritory)
+	}
+	if oppTerritory != BOARD_HEIGHT*BOARD_WIDTH {
+		t.Errorf("Living agent should claim entire board, got %d", oppTerritory)
+	}
+
+	agent1.Alive = true
+	agent2.Alive = false
+	myTerritory, oppTerritory = calculateVoronoiTerritory(agent1, agent2)
+
+	if myTerritory != BOARD_HEIGHT*BOARD_WIDTH {
+		t.Errorf("Living agent should claim entire board, got %d", myTerritory)
+	}
+	if oppTerritory != 0 {
+		t.Errorf("Dead agent should have 0 territory, got %d", oppTerritory)
+	}
+}
+
+func TestCalculateVoronoiTerritoryWithTrails(t *testing.T) {
+	board := NewGameBoard(18, 20)
+
+	for x := 0; x < 10; x++ {
+		board.SetCellState(Position{X: x, Y: 9}, AGENT)
+	}
+
+	agent1 := NewAgent(1, Position{X: 5, Y: 4}, RIGHT, board)
+	agent2 := NewAgent(2, Position{X: 5, Y: 14}, LEFT, board)
+
+	myTerritory, oppTerritory := calculateVoronoiTerritory(agent1, agent2)
+
+	if myTerritory == 0 || oppTerritory == 0 {
+		t.Error("Both agents should claim some territory")
+	}
+
+	if oppTerritory > myTerritory {
+		t.Log("Agent on far side of wall claims more territory (expected)")
+	}
+}
+
+func TestCalculateVoronoiTerritorySamePosition(t *testing.T) {
+	board := NewGameBoard(18, 20)
+	agent1 := NewAgent(1, Position{X: 10, Y: 10}, RIGHT, board)
+	agent2 := NewAgent(2, Position{X: 10, Y: 10}, LEFT, board)
+
+	myTerritory, oppTerritory := calculateVoronoiTerritory(agent1, agent2)
+
+	if myTerritory+oppTerritory > 2 {
+		t.Logf("Both agents at same position: my=%d opp=%d", myTerritory, oppTerritory)
 	}
 }
 

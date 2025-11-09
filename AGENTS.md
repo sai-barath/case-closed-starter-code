@@ -1,11 +1,8 @@
 # Agent Development Guide
 
 ## Build/Test Commands
-- **Run tests**: `uv run pytest` or `python -m pytest` or `python -m unittest test_game_logic.py`
-- **Run single test**: `uv run pytest test_game_logic.py::TestAgent::test_agent_boost`
-- **Run agent**: `uv run agent.py` (port 5008) or `PORT=5009 uv run sample_agent.py`
-- **Run judge**: `uv run judge_engine.py` (requires both agents running)
-- **Go agent**: `cd steamroller0 && go run main.go` or `go build -o steamroller && ./steamroller`
+
+Never run commands let me do it!!!!
 
 ## Code Style (Python)
 - **Python**: 3.13+, use `uv` for dependency management

@@ -55,7 +55,15 @@ func DecideMove(myTrail, otherTrail [][]int, turnCount, myBoosts, playerNumber i
 
 	snapshot := buildGameSnapshot(myTrail, otherTrail, myBoosts, playerNumber)
 
-	if !snapshot.myAgent.Alive {
+	if snapshot.myAgent == nil || !snapshot.myAgent.Alive {
+		return "RIGHT"
+	}
+
+	if snapshot.otherAgent == nil || !snapshot.otherAgent.Alive {
+		validMoves := snapshot.myAgent.GetValidMoves()
+		if len(validMoves) > 0 {
+			return directionToString(validMoves[0])
+		}
 		return "RIGHT"
 	}
 
@@ -132,6 +140,10 @@ func searchAtDepth(snapshot GameStateSnapshot, maxDepth int, ctx *SearchContext)
 
 		for _, useBoost := range []bool{false, true} {
 			if useBoost && snapshot.myAgent.BoostsRemaining <= 0 {
+				continue
+			}
+
+			if useBoost && !shouldUseBoost(snapshot, dir) {
 				continue
 			}
 
@@ -280,19 +292,25 @@ func evaluatePosition(myAgent *Agent, otherAgent *Agent) int {
 
 	score := 0
 
-	mySpace := countAvailableSpace(myAgent)
-	opponentSpace := countAvailableSpace(otherAgent)
-	spaceDiff := mySpace - opponentSpace
-	score += spaceDiff * 20
+	myTerritory, oppTerritory := calculateVoronoiTerritory(myAgent, otherAgent)
+	territoryDiff := myTerritory - oppTerritory
+	score += territoryDiff * 50
 
 	myFreedom := len(myValidMoves)
 	opponentFreedom := len(opponentValidMoves)
-	score += (myFreedom - opponentFreedom) * 50
+	score += (myFreedom - opponentFreedom) * 150
+
+	myLocalSpace := countReachableSpace(myAgent, 15)
+	oppLocalSpace := countReachableSpace(otherAgent, 15)
+	score += (myLocalSpace - oppLocalSpace) * 100
+
+	boostDiff := myAgent.BoostsRemaining - otherAgent.BoostsRemaining
+	score += boostDiff * 20
 
 	return score
 }
 
-func countAvailableSpace(agent *Agent) int {
+func countReachableSpace(agent *Agent, maxDepth int) int {
 	if !agent.Alive {
 		return 0
 	}
@@ -303,7 +321,7 @@ func countAvailableSpace(agent *Agent) int {
 	visited[head] = true
 	count := 0
 
-	for len(queue) > 0 && count < 150 {
+	for len(queue) > 0 && count < maxDepth {
 		current := queue[0]
 		queue = queue[1:]
 		count++
@@ -323,6 +341,83 @@ func countAvailableSpace(agent *Agent) int {
 	}
 
 	return count
+}
+
+func shouldUseBoost(snapshot GameStateSnapshot, dir Direction) bool {
+	myTerritory, oppTerritory := calculateVoronoiTerritory(snapshot.myAgent, snapshot.otherAgent)
+
+	if myTerritory > oppTerritory+20 {
+		return true
+	}
+
+	myLocalSpace := countReachableSpace(snapshot.myAgent, 10)
+	oppLocalSpace := countReachableSpace(snapshot.otherAgent, 10)
+
+	if myLocalSpace > oppLocalSpace+15 {
+		return true
+	}
+
+	return false
+}
+
+func calculateVoronoiTerritory(myAgent *Agent, otherAgent *Agent) (int, int) {
+	if !myAgent.Alive {
+		return 0, BOARD_HEIGHT * BOARD_WIDTH
+	}
+	if !otherAgent.Alive {
+		return BOARD_HEIGHT * BOARD_WIDTH, 0
+	}
+
+	type QueueItem struct {
+		pos   Position
+		owner int
+	}
+
+	visited := make(map[Position]int)
+	queue := []QueueItem{}
+
+	myHead := myAgent.GetHead()
+	oppHead := otherAgent.GetHead()
+
+	queue = append(queue, QueueItem{pos: myHead, owner: 1})
+	queue = append(queue, QueueItem{pos: oppHead, owner: 2})
+	visited[myHead] = 1
+	visited[oppHead] = 2
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		for _, dir := range AllDirections {
+			next := Position{
+				X: current.pos.X + dir.DX,
+				Y: current.pos.Y + dir.DY,
+			}
+			next = myAgent.Board.TorusCheck(next)
+
+			if myAgent.Board.GetCellState(next) != EMPTY {
+				continue
+			}
+
+			if _, seen := visited[next]; !seen {
+				visited[next] = current.owner
+				queue = append(queue, QueueItem{pos: next, owner: current.owner})
+			}
+		}
+	}
+
+	myTerritory := 0
+	oppTerritory := 0
+
+	for _, owner := range visited {
+		if owner == 1 {
+			myTerritory++
+		} else if owner == 2 {
+			oppTerritory++
+		}
+	}
+
+	return myTerritory, oppTerritory
 }
 
 func buildGameSnapshot(myTrail, otherTrail [][]int, myBoosts, playerNumber int) GameStateSnapshot {

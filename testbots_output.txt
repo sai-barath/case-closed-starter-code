@@ -1,0 +1,24 @@
+Testing ./steamroller0/steamroller against 3 previous versions
+
+============================================================
+
+v0:
+Ports 10001 or 10002 already in use
+  Failed to run game
+
+v1:
+Ports 10001 or 10002 already in use
+  Failed to run game
+
+v2:
+Ports 10001 or 10002 already in use
+  Failed to run game
+
+============================================================
+OVERALL STATS
+============================================================
+Total Wins: 0
+Total Losses: 0
+Total Ties: 0
+Win Rate: 0/0
+============================================================
